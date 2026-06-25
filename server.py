@@ -111,6 +111,7 @@ async def handler(websocket):
                     games[room_code]['online'] = {'w': True, 'b': False}
                     players[websocket] = (room_code, 'w')
                     await websocket.send(json.dumps({"type": "room_created", "room": room_code, "color": "w", "session_token": session_token}))
+                    await broadcast_state(room_code)
 
                 elif data['type'] == 'join_room':
                     room_code = data['room'].upper()
