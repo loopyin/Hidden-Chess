@@ -53,6 +53,30 @@ async def cleanup_stale_rooms():
             print(f"Cleaned up stale room: {code}")
 
 
+async def broadcast_lobby(room_code):
+    try:
+        state = games[room_code]
+        lobby_data = {
+            "type": "lobby_update",
+            "state": {
+                "opponent_joined": state.get('opponent_joined', False),
+                "guest_ready": state.get('guest_ready', False),
+                "fakeout_mode_enabled": state.get('fakeout_mode_enabled', False),
+                "disable_undo_placeholder": state.get('disable_undo_placeholder', False),
+                "score_to_win": state.get('score_to_win', False),
+                "ice_king_enabled": state.get('ice_king_enabled', False),
+            }
+        }
+        msg = json.dumps(lobby_data)
+        for ws, info in list(players.items()):
+            if info[0] == room_code:
+                try:
+                    await ws.send(msg)
+                except websockets.exceptions.ConnectionClosed:
+                    pass
+    except Exception as e:
+        print(f"Broadcast lobby error: {e}")
+
 async def broadcast_state(room_code):
     from debug_utils import check_invariants, log_minimal_snapshot
     try:
@@ -72,6 +96,12 @@ async def broadcast_state(room_code):
                     safe_state['rematch_declined'] = state.get('rematch_declined')
                     safe_state['opponent_left'] = state.get('opponent_left', False)
                     safe_state['game_started'] = state['game_started']
+                    safe_state['fakeout_mode_enabled'] = state.get('fakeout_mode_enabled', False)
+                    safe_state['disable_undo_placeholder'] = state.get('disable_undo_placeholder', False)
+                    safe_state['score_to_win'] = state.get('score_to_win', False)
+                    safe_state['ice_king_enabled'] = state.get('ice_king_enabled', False)
+                    safe_state['guest_ready'] = state.get('guest_ready', False)
+                    safe_state['opponent_joined'] = state.get('opponent_joined', False)
 
                     serialized = serialize_state(safe_state, player_color=target_color)
                 else:
@@ -111,7 +141,6 @@ async def handler(websocket):
                     games[room_code]['online'] = {'w': True, 'b': False}
                     players[websocket] = (room_code, 'w')
                     await websocket.send(json.dumps({"type": "room_created", "room": room_code, "color": "w", "session_token": session_token}))
-                    await broadcast_state(room_code)
 
                 elif data['type'] == 'join_room':
                     room_code = data['room'].upper()
@@ -151,6 +180,7 @@ async def handler(websocket):
                                 active_timers.discard(room_timers[room_code])
                             await websocket.send(json.dumps({"type": "room_joined", "room": room_code, "color": "b", "session_token": session_token}))
                             await broadcast_state(room_code)
+                            await broadcast_lobby(room_code)
                         else:
                             await websocket.send(json.dumps({"type": "error", "message": "Sala não encontrada ou cheia."}))
                     else:
@@ -193,36 +223,37 @@ async def handler(websocket):
                     if action == 'set_fakeout_mode':
                         if color == 'w':
                             gs['fakeout_mode_enabled'] = data.get('fakeout_mode_enabled', False)
-                            await broadcast_state(room_code)
+                            await broadcast_lobby(room_code)
                         continue
 
                     elif action == 'set_disable_undo':
                         if color == 'w':
                             gs['disable_undo_placeholder'] = data.get('disable_undo_placeholder', False)
-                            await broadcast_state(room_code)
+                            await broadcast_lobby(room_code)
                         continue
 
                     elif action == 'set_score_to_win':
                         if color == 'w':
                             gs['score_to_win'] = data.get('score_to_win', False)
-                            await broadcast_state(room_code)
+                            await broadcast_lobby(room_code)
                         continue
 
                     elif action == 'set_ice_king':
                         if color == 'w':
                             gs['ice_king_enabled'] = data.get('ice_king_enabled', False)
-                            await broadcast_state(room_code)
+                            await broadcast_lobby(room_code)
                         continue
 
                     elif action == 'set_ready':
                         if color == 'b':
                             gs['guest_ready'] = data.get('guest_ready', False)
-                            await broadcast_state(room_code)
+                            await broadcast_lobby(room_code)
                         continue
 
                     elif action == 'start_game':
                         if color == 'w' and gs.get('opponent_joined', False) and gs.get('guest_ready', False):
                             gs['game_started'] = True
+                            gs['turn_start_snapshot'] = copy.deepcopy(gs)
                             if room_code in room_timers:
                                 room_timers[room_code].cancel()
                                 active_timers.discard(room_timers[room_code])
