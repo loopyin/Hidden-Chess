@@ -534,7 +534,7 @@ async def handler(websocket):
 
 
 async def main():
-    port = int(os.environ.get("WS_PORT", 3000))
+    port = int(os.environ.get("PORT", os.environ.get("WS_PORT", 3000)))
     print(f"Starting Shadow Chess websocket server on 0.0.0.0:{port}")
     asyncio.create_task(cleanup_stale_rooms())
     async with websockets.serve(
