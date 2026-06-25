@@ -1932,7 +1932,7 @@ async def game_loop():
     load_assets()
     title_font = fonts['title']
 
-    uri = "wss://chess-2-8k6w.onrender.com"
+    uri = "wss://hidden-chess-lnbg.onrender.com"
     
     # Try to wake up server immediately in background
     asyncio.create_task(wake_up_server(uri))
