@@ -137,8 +137,7 @@ def registrar_proximo_lance_auto(gs, client_state):
 
     h_active = client_state.get('history_active', False)
     is_local = client_state.get('is_local', False)
-    is_live = client_state.get('is_live', False)
-    active_color = gs['turn'] if (is_local or is_live) else client_state.get('my_color')
+    active_color = gs['turn'] if is_local else client_state.get('my_color')
 
     if not client_state.get('drafting'):
         temp_next_en = not h_active and gs['turn'] == active_color and (gs['normal_done'] or gs.get('hidden_count', 0) > 0)
@@ -597,7 +596,7 @@ def draw_board(screen, gs, fonts, client_state, mouse):
     last = gs['last_move']
     show = client_state['show_hidden']
     
-    my_color = gs['turn'] if client_state.get('is_live', False) else client_state['my_color']
+    my_color = client_state['my_color']
     my_hidden = gs['hidden_w'] if my_color == 'w' else gs['hidden_b']
     is_drafting = client_state.get('drafting', False)
     hmode = (client_state.get('draft_hidden', False) if is_drafting else gs['hidden_mode']) or client_state.get('hidden_triggered', False)
@@ -702,31 +701,10 @@ def draw_board(screen, gs, fonts, client_state, mouse):
                 pygame.draw.circle(ds, (0, 0, 0, 65), (SQ // 2, SQ // 2), SQ // 7)
                 screen.blit(ds, (x, y))
 
-            if cell.is_threatened or getattr(cell, 'is_legal_capture', False):
-                t = pygame.time.get_ticks() / 500.0
-                target_col = (240, 220, 60) if cell.is_threatened else (240, 60, 60)
-                cx, cy = x + SQ // 2, y + SQ // 2
-                
-                # Corner brackets
-                bracket_len = 16
-                bracket_thick = 4
-                margin = 4 + int(math.sin(t * math.pi) * 3) # Pulsing margin
-                
-                # Top-Left
-                pygame.draw.line(screen, target_col, (x + margin, y + margin), (x + margin + bracket_len, y + margin), bracket_thick)
-                pygame.draw.line(screen, target_col, (x + margin, y + margin), (x + margin, y + margin + bracket_len), bracket_thick)
-                # Top-Right
-                pygame.draw.line(screen, target_col, (x + SQ - margin - 1, y + margin), (x + SQ - margin - 1 - bracket_len, y + margin), bracket_thick)
-                pygame.draw.line(screen, target_col, (x + SQ - margin - 1, y + margin), (x + SQ - margin - 1, y + margin + bracket_len), bracket_thick)
-                # Bottom-Left
-                pygame.draw.line(screen, target_col, (x + margin, y + SQ - margin - 1), (x + margin + bracket_len, y + SQ - margin - 1), bracket_thick)
-                pygame.draw.line(screen, target_col, (x + margin, y + SQ - margin - 1), (x + margin, y + SQ - margin - 1 - bracket_len), bracket_thick)
-                # Bottom-Right
-                pygame.draw.line(screen, target_col, (x + SQ - margin - 1, y + SQ - margin - 1), (x + SQ - margin - 1 - bracket_len, y + SQ - margin - 1), bracket_thick)
-                pygame.draw.line(screen, target_col, (x + SQ - margin - 1, y + SQ - margin - 1), (x + SQ - margin - 1, y + SQ - margin - 1 - bracket_len), bracket_thick)
-                
-                # Inner crosshair subtle element
-                pygame.draw.circle(screen, target_col, (cx, cy), 4, 2)
+            if getattr(cell, 'is_legal_capture', False):
+                ds = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
+                pygame.draw.circle(ds, (0, 0, 0, 65), (SQ // 2, SQ // 2), SQ // 2 - 4, 6)
+                screen.blit(ds, (x, y))
 
             # Draw blue/orange ink trail on the path if show is True
             if show:
@@ -1262,6 +1240,8 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         rect = pygame.Rect(x, y_pos, w, bh)
         is_hover = rect.collidepoint(mouse) and is_enabled
         
+        is_clicked = is_hover and pygame.mouse.get_pressed()[0]
+        
         # Slight press down effect
         if is_hover or is_active:
             rect.y += 1
@@ -1269,6 +1249,14 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         b_color = None
         if is_active:
             b_color = (245, 120, 20) if key == 'fakeout' else (80, 120, 220)
+            
+        if key == 'end':
+            if is_clicked:
+                base_color = (40, 160, 80)
+                hover_color = (60, 180, 100)
+            else:
+                base_color = (70, 70, 75)
+                hover_color = (90, 90, 95)
             
         draw_fancy_btn(screen, text, fonts['ui'], base_color, hover_color, BTN_TXT, rect, is_hover=is_hover, is_disabled=not is_enabled, border_color=b_color, custom_radius=6)
         btns[key] = rect
@@ -1362,7 +1350,7 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         end_en = not history_active and turn == my_color and (gs['normal_done'] or gs['hidden_count'] > 0 or gs.get(f'next_queue_{turn}'))
         if client_state.get('draft_moves'):
             end_en = check_draft_endable(client_state['draft_moves'], end_en)
-        draw_btn(488, 64, 'end', 'Encerrar', end_en, False, BTN_END, BTN_ENDH)
+        draw_btn(488, 64, 'end', 'pronto', end_en, False, BTN_END, BTN_ENDH)
 
     # Replay button and log buttons removed during mid-game.
 
@@ -1877,10 +1865,6 @@ async def connect_and_join(uri, action, room_code=None, token=None):
                 await ws.send(json.dumps({"type": "create_room"}))
             elif action == "join_room":
                 await ws.send(json.dumps({"type": "join_room", "room": room_code, "session_token": token}))
-            elif action == "create_live_room":
-                await ws.send(json.dumps({"type": "create_live_room"}))
-            elif action == "join_live_room":
-                await ws.send(json.dumps({"type": "join_live_room", "room": room_code}))
             
             # Wait for initial response to confirm it didn't just hang
             msg = await asyncio.wait_for(ws.recv(), timeout=10)
@@ -1969,9 +1953,8 @@ async def game_loop():
     btn_create = pygame.Rect(WIN_W // 2 - 100, menu_y_start, 200, 50)
     btn_join = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 70, 200, 50)
     btn_local = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 140, 200, 50)
-    btn_live = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 210, 200, 50)
-    btn_test = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 280, 200, 50)
-    btn_replays = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 350, 200, 50)
+    btn_test = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 210, 200, 50)
+    btn_replays = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 280, 200, 50)
 
     def start_local_game(is_test=False):
         nonlocal gs, client_state, app_state
@@ -2187,10 +2170,7 @@ async def game_loop():
                 if data['type'] == 'room_created':
                     client_state['room_code'] = data['room']
                     client_state['my_color'] = data['color']
-                    if client_state.get('is_live'):
-                        app_state = "LIVE_CREATED"
-                    else:
-                        app_state = "LOBBY"
+                    app_state = "LOBBY"
                     save_session(data['room'], data.get('session_token'))
 
                 elif data['type'] == 'room_joined':
@@ -2199,7 +2179,7 @@ async def game_loop():
                     client_state['flipped'] = (data['color'] == 'b')
                     save_session(data['room'], data.get('session_token'))
                     if data.get('reconnected'):
-                        app_state = "GAME"
+                        app_state = "PLAYING"
                         client_state['waiting'] = True # Will be cleared by state_update
                     else:
                         app_state = "LOBBY"
@@ -2210,20 +2190,20 @@ async def game_loop():
                     
                     if new_gs.get('game_over') and not gs.get('game_over'):
                         play_sound('game_over')
-                    elif gs.get('last_move') != new_gs.get('last_move') and new_gs.get('last_move') or len(new_gs.get('log', [])) > len(gs.get('log', [])) or gs.get('turn') != new_gs.get('turn'):
+                    elif gs.get('last_move') != new_gs.get('last_move') and new_gs.get('last_move') or len(new_gs.get('log', [])) != len(gs.get('log', [])):
                         fr, fc, tr, tc = new_gs.get('last_move', (None, None, None, None))
                         
                         # Detect any captured piece on destination square before the move
                         has_captured_piece_on_square = False
-                        if gs.get('board') and tr is not None and tc is not None and 0 <= tr < 8 and 0 <= tc < 8:
+                        move_changed = gs.get('last_move') != new_gs.get('last_move')
+                        
+                        if move_changed and gs.get('board') and tr is not None and tc is not None and 0 <= tr < 8 and 0 <= tc < 8:
                             has_captured_piece_on_square = gs['board'][tr][tc] is not None
                         
                         # Robust check of all new log entries to see if any represent a capture
                         new_log_entries = []
                         if gs.get('log') and len(new_gs.get('log', [])) > len(gs['log']):
                             new_log_entries = new_gs['log'][len(gs['log']):]
-                        elif new_gs.get('log'):
-                            new_log_entries = [new_gs['log'][-1]]
                         
                         is_capture_by_log = False
                         for entry in new_log_entries:
@@ -2248,17 +2228,16 @@ async def game_loop():
                         is_next_move = "[next]" in last_log.lower() if last_log else False
                         
                         abs_b_new = get_absolute_board(new_gs)
-                        if new_gs.get('game_over', False) and not gs.get('game_over', False):
-                            pass # Handled below by play_sound('game_over') ? Wait, no
                             
-                        if in_check(abs_b_new, new_gs['turn']):
-                            play_sound('check')
-                        elif is_capture:
-                            play_sound('capture')
-                        elif is_next_move:
-                            play_sound('next_move')
-                        else:
-                            play_sound('move')
+                        if move_changed or is_capture_by_log or is_next_move:
+                            if in_check(abs_b_new, new_gs['turn']):
+                                play_sound('check')
+                            elif is_capture:
+                                play_sound('capture')
+                            elif is_next_move:
+                                play_sound('next_move')
+                            else:
+                                play_sound('move')
                         
                         is_undo = new_gs.get('turn_count', 0) < gs.get('turn_count', 0) or (new_gs.get('turn_count', 0) == gs.get('turn_count', 0) and len(new_gs.get('log', [])) < len(gs.get('log', [])))
 
@@ -2275,7 +2254,7 @@ async def game_loop():
                                             break
                                 if p_anim:
                                     trigger_piece_anim(client_state, p_anim, tr_u, tc_u, fr_u, fc_u, is_shadow=False, is_fakeout=False, is_capture=False)
-                        else:
+                        elif move_changed:
                             if new_gs.get('last_move'):
                                 fr, fc, tr, tc = new_gs['last_move']
                                 p_anim = new_gs['board'][tr][tc]
@@ -2331,7 +2310,7 @@ async def game_loop():
 
                     if client_state['selected']:
                         r, c = client_state['selected']
-                        effective_col = new_gs['turn'] if client_state.get('is_live', False) else client_state['my_color']
+                        effective_col = client_state['my_color']
                         tb = get_true_board(new_gs, effective_col)
                         p = tb[r][c]
 
@@ -2346,11 +2325,8 @@ async def game_loop():
                         if app_state != "PLAYING":
                             play_sound('start')
                         app_state = "PLAYING"
-                        if client_state.get('is_live'):
-                            pygame.display.set_caption(f"Hidden Chess - Modo Live (Sala: {client_state['room_code']})")
-                        else:
-                            pygame.display.set_caption(
-                                f"Hidden Chess - Jogando de {'Brancas' if client_state['my_color'] == 'w' else 'Pretas'} (Sala: {client_state['room_code']})")
+                        pygame.display.set_caption(
+                            f"Hidden Chess - Jogando de {'Brancas' if client_state['my_color'] == 'w' else 'Pretas'} (Sala: {client_state['room_code']})")
                     else:
                         app_state = "LOBBY"
                         client_state['fakeout_mode_enabled'] = gs.get('fakeout_mode_enabled', False)
@@ -2433,9 +2409,6 @@ async def game_loop():
                     elif btn_local.collidepoint((mx, my)):
                         play_sound('click')
                         start_local_game(is_test=False)
-                    elif btn_live.collidepoint((mx, my)):
-                        play_sound('click')
-                        app_state = "LIVE_MENU"
                     elif btn_test.collidepoint((mx, my)):
                         play_sound('click')
                         start_local_game(is_test=True)
@@ -2444,94 +2417,6 @@ async def game_loop():
                         app_state = "REPLAY_LIST"
                         client_state['replay_list'] = load_replay_files()
                         client_state['replay_page'] = 0
-
-            elif app_state == "LIVE_MENU":
-                if ev.type == pygame.MOUSEBUTTONDOWN:
-                    mx, my = ev.pos
-                    if btn_create.collidepoint((mx, my)):
-                        play_sound('click')
-                        app_state = "CONNECTING"
-                        gs = make_state()
-                        client_state = {
-                            'my_color': None,
-                            'waiting': True,
-                            'flipped': False,
-                            'selected': None,
-                            'legal_sq': [],
-                            'room_code': None,
-                            'is_typing': False,
-                            'msg_queue': deque(),
-                            'show_hidden': True,
-                            'resign_confirm': False,
-                            'panel_btns': {},
-                            'is_local': False,
-                            'is_live': True,
-                            'fakeout_mode_enabled': False,
-                            'disable_undo_placeholder': False,
-                            'score_to_win': False
-                        }
-                        try:
-                            client_state['conn_task'] = asyncio.create_task(connect_and_join(uri, "create_live_room"))
-                        except Exception as e:
-                            error_msg = f"Falha ao conectar."
-                            app_state = "MENU"
-                            
-                    elif btn_join.collidepoint((mx, my)):
-                        play_sound('click')
-                        app_state = "LIVE_JOINING"
-                        input_text = ""
-
-            elif app_state == "LIVE_CREATED":
-                if ev.type == pygame.MOUSEBUTTONDOWN:
-                    mx, my = ev.pos
-                    if client_state.get('created_btn_ok') and client_state['created_btn_ok'].collidepoint((mx, my)):
-                        play_sound('click')
-                        app_state = "LOBBY"
-
-            elif app_state == "LIVE_JOINING":
-                if ev.type == pygame.TEXTINPUT and len(input_text) < 4:
-                    if ev.text and ev.text.isalnum():
-                        input_text += ev.text.upper()
-                
-                if ev.type == pygame.MOUSEBUTTONDOWN:
-                    mx, my = ev.pos
-                    
-                    if client_state.get('join_btn_apagar') and client_state['join_btn_apagar'].collidepoint((mx, my)):
-                        play_sound('click')
-                        input_text = input_text[:-1]
-                        
-                    elif client_state.get('join_btn_ok') and client_state['join_btn_ok'].collidepoint((mx, my)):
-                        if len(input_text) == 4:
-                            play_sound('click')
-                            app_state = "CONNECTING"
-                            gs = make_state()
-                            client_state = {
-                                'my_color': None,
-                                'waiting': True,
-                                'flipped': False,
-                                'selected': None,
-                                'legal_sq': [],
-                                'room_code': None,
-                                'is_typing': False,
-                                'msg_queue': deque(),
-                                'show_hidden': True,
-                                'resign_confirm': False,
-                                'panel_btns': {},
-                                'is_local': False,
-                                'is_live': True,
-                                'fakeout_mode_enabled': False,
-                                'disable_undo_placeholder': False,
-                                'score_to_win': False
-                            }
-                            try:
-                                client_state['conn_task'] = asyncio.create_task(connect_and_join(uri, "join_live_room", input_text))
-                            except Exception as e:
-                                error_msg = f"Falha ao conectar."
-                                app_state = "LIVE_MENU"
-                                
-                    elif client_state.get('join_btn_cancel') and client_state['join_btn_cancel'].collidepoint((mx, my)):
-                        play_sound('click')
-                        app_state = "LIVE_MENU"
 
             elif app_state == "JOINING":
                 if ev.type == pygame.TEXTINPUT and len(input_text) < 4:
@@ -2861,17 +2746,26 @@ async def game_loop():
                                 else:
                                     pygame.display.set_caption("Hidden Chess - Partida Local")
                             else:
-                                if gs.get('opponent_joined', False):
+                                if client_state.get('my_color') == 'b':
+                                    new_ready = not gs.get('guest_ready', False)
                                     if websocket:
                                         await websocket.send(json.dumps({
                                             "type": "action",
-                                            "action": "start_game"
+                                            "action": "set_ready",
+                                            "guest_ready": new_ready
                                         }))
+                                        play_sound('click')
+                                elif client_state.get('my_color') == 'w':
+                                    if gs.get('opponent_joined', False) and gs.get('guest_ready', False):
+                                        if websocket:
+                                            await websocket.send(json.dumps({
+                                                "type": "action",
+                                                "action": "start_game"
+                                            }))
 
             elif app_state == "PLAYING":
                 is_local = client_state.get('is_local', False)
-                is_live = client_state.get('is_live', False)
-                active_color = gs['turn'] if (is_local or is_live) else client_state['my_color']
+                active_color = gs['turn'] if is_local else client_state['my_color']
 
                 if ev.type == pygame.KEYDOWN:
                     if ev.key == pygame.K_LEFT:
@@ -2922,7 +2816,7 @@ async def game_loop():
                         client_state['flipped'] = not client_state['flipped']
                     elif ev.key == pygame.K_h and gs['turn'] == active_color and not gs.get('disable_undo_placeholder', False):
                         turn = gs['turn']
-                        my_color = gs['turn'] if client_state.get('is_live', False) else client_state['my_color']
+                        my_color = client_state['my_color']
                         total_plys = len(client_state.get('turn_history', []))
                         active_idx = client_state.get('history_index', 0)
                         history_active = total_plys > 0 and active_idx < total_plys - 1
@@ -3069,6 +2963,18 @@ async def game_loop():
                 elif ev.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = ev.pos
                     if ev.button in (4, 5):
+                        continue
+                        
+                    if not client_state.get('is_local', False) and gs.get('opponent_left') and not gs.get('game_over'):
+                        btns = client_state.get('panel_btns', {})
+                        if btns.get('exit_room') and btns['exit_room'].collidepoint((mx, my)):
+                            play_sound('click')
+                            await websocket.send(json.dumps({"type": "leave_room"}))
+                            if websocket:
+                                await websocket.close()
+                                websocket = None
+                            app_state = "MENU"
+                            client_state['room_code'] = None
                         continue
 
                     if client_state['waiting']: continue
@@ -3820,7 +3726,6 @@ async def game_loop():
             draw_fancy_btn(screen, "Criar Jogo", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_create, is_hover=btn_create.collidepoint(mouse))
             draw_fancy_btn(screen, "Entrar no Jogo", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_join, is_hover=btn_join.collidepoint(mouse))
             draw_fancy_btn(screen, "Jogar Localmente", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_local, is_hover=btn_local.collidepoint(mouse))
-            draw_fancy_btn(screen, "Live", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_live, is_hover=btn_live.collidepoint(mouse))
             draw_fancy_btn(screen, "Modo Teste", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_test, is_hover=btn_test.collidepoint(mouse))
             draw_fancy_btn(screen, "Replays", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_replays, is_hover=btn_replays.collidepoint(mouse))
 
@@ -3850,47 +3755,6 @@ async def game_loop():
         elif app_state == "CONNECTING":
             draw_text_center(screen, "CONECTANDO AO SERVIDOR...", fonts['big'], T_MAIN, WIN_H // 2 - 25)
             draw_text_center(screen, "Por favor, aguarde.", fonts['small'], T_DIM, WIN_H // 2 + 25)
-
-        elif app_state == "LIVE_MENU":
-            draw_text_center(screen, "MODO LIVE", title_font, T_MAIN, WIN_H // 2 - 80)
-            draw_fancy_btn(screen, "Criar Sala", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_create, is_hover=btn_create.collidepoint(mouse))
-            draw_fancy_btn(screen, "Entrar em Sala", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_join, is_hover=btn_join.collidepoint(mouse))
-
-        elif app_state == "LIVE_CREATED":
-            draw_text_center(screen, "SALA LIVE CRIADA!", fonts['big'], T_MAIN, WIN_H // 2 - 80)
-            
-            code_text = client_state.get('room_code', '')
-            draw_text_center(screen, code_text, title_font, T_BLUE, WIN_H // 2 - 20)
-            
-            btn_ok = pygame.Rect(WIN_W // 2 - 50, WIN_H // 2 + 50, 100, 40)
-            client_state['created_btn_ok'] = btn_ok
-            draw_fancy_btn(screen, "OK", fonts['small'], BTN_BLUE, BTN_BLUEH, BTN_TXT, btn_ok, is_hover=btn_ok.collidepoint(mouse))
-
-        elif app_state == "LIVE_JOINING":
-            draw_text_center(screen, "DIGITE O CÓDIGO DA SALA LIVE:", fonts['big'], T_MAIN, WIN_H // 2 - 80)
-            box_w = 160
-            input_rect = pygame.Rect(WIN_W // 2 - box_w // 2, WIN_H // 2 - 40, box_w, 60)
-            client_state['join_input_rect'] = input_rect
-            
-            draw_rect_aa(screen, (40, 40, 45), input_rect, 5)
-            draw_rect_aa(screen, (80, 120, 220), input_rect, 5, 2)
-            draw_text_center(screen, input_text, title_font, (255, 255, 255), input_rect.centery)
-
-            btn_gap = 10
-            bw = 100
-            bx_center = WIN_W // 2
-            
-            btn_apagar = pygame.Rect(bx_center - bw // 2 - bw - btn_gap, WIN_H // 2 + 65, bw, 40)
-            btn_ok = pygame.Rect(bx_center - bw // 2, WIN_H // 2 + 65, bw, 40)
-            btn_cancel = pygame.Rect(bx_center + bw // 2 + btn_gap, WIN_H // 2 + 65, bw, 40)
-            
-            client_state['join_btn_apagar'] = btn_apagar
-            client_state['join_btn_ok'] = btn_ok
-            client_state['join_btn_cancel'] = btn_cancel
-            
-            draw_fancy_btn(screen, "Apagar", fonts['small'], BTN_N, BTN_H, BTN_TXT, btn_apagar, is_hover=btn_apagar.collidepoint(mouse))
-            draw_fancy_btn(screen, "OK", fonts['small'], BTN_BLUE, BTN_BLUEH, BTN_TXT, btn_ok, is_hover=btn_ok.collidepoint(mouse) and len(input_text) == 4, is_disabled=len(input_text) < 4)
-            draw_fancy_btn(screen, "Cancelar", fonts['small'], (120, 40, 40), (160, 50, 50), BTN_TXT, btn_cancel, is_hover=btn_cancel.collidepoint(mouse))
 
         elif app_state == "JOINING":
             draw_text_center(screen, "DIGITE O CÓDIGO DA SALA:", fonts['big'], T_MAIN, WIN_H // 2 - 80)
@@ -3946,11 +3810,6 @@ async def game_loop():
                 room_type = "Teste" if client_state.get('is_test', False) else "Local"
                 draw_text_center(screen, room_type, fonts['small'], T_DIM, WIN_H // 2 - 200)
                 box_y_start = WIN_H // 2 - 160
-            elif client_state.get('is_live', False):
-                room_type = "Live"
-                draw_text_center(screen, room_type, fonts['small'], T_DIM, WIN_H // 2 - 200)
-                draw_text_center(screen, f"CÓDIGO DA SALA LIVE: {client_state.get('room_code', '').upper()}", fonts['small'], T_BLUE, WIN_H // 2 - 175)
-                box_y_start = WIN_H // 2 - 140
             else:
                 room_type = "Online"
                 draw_text_center(screen, room_type, fonts['small'], T_DIM, WIN_H // 2 - 200)
@@ -4050,14 +3909,24 @@ async def game_loop():
             play_btn_rect = pygame.Rect((WIN_W - 240) // 2, play_btn_y, 240, 52)
 
             if client_state.get('my_color') == 'b':
-                draw_text_center(screen, "AGUARDANDO O ANFITRIÃO INICIAR...", fonts['big'], (200, 200, 200), play_btn_rect.centery)
+                is_ready = gs.get('guest_ready', False)
+                play_hover = play_btn_rect.collidepoint(mouse)
+                base_c = (40, 160, 80) if is_ready else (70, 70, 75)
+                hov_c = (60, 180, 100) if is_ready else (90, 90, 95)
+                draw_fancy_btn(screen, "pronto", title_font, base_c, hov_c, (255, 255, 255), play_btn_rect, is_hover=play_hover, custom_radius=8)
             else:
-                can_play = client_state.get('is_local', False) or client_state.get('is_live', False) or gs.get('opponent_joined', False)
+                can_play = client_state.get('is_local', False) or (gs.get('opponent_joined', False) and gs.get('guest_ready', False))
                 play_hover = play_btn_rect.collidepoint(mouse) and can_play
                 if can_play:
-                    draw_fancy_btn(screen, "Play", title_font, (35, 130, 65), (50, 160, 85), (255, 255, 255), play_btn_rect, is_hover=play_hover, custom_radius=8)
+                    base_c = (35, 130, 65)
+                    hov_c = (50, 160, 85)
+                    draw_fancy_btn(screen, "Começar", title_font, base_c, hov_c, (255, 255, 255), play_btn_rect, is_hover=play_hover, custom_radius=8)
                 else:
-                    draw_fancy_btn(screen, "Play", title_font, (45, 45, 48), (45, 45, 48), (120, 120, 125), play_btn_rect, is_disabled=True, custom_radius=8)
+                    if gs.get('opponent_joined', False) and not gs.get('guest_ready', False):
+                        draw_text_center(screen, "AGUARDANDO CONVIDADO...", fonts['small'], (200, 200, 200), play_btn_rect.y - 20)
+                    elif not gs.get('opponent_joined', False) and not client_state.get('is_local', False):
+                        draw_text_center(screen, "AGUARDANDO OPONENTE...", fonts['small'], (200, 200, 200), play_btn_rect.y - 20)
+                    draw_fancy_btn(screen, "Começar", title_font, (45, 45, 48), (45, 45, 48), (120, 120, 125), play_btn_rect, is_disabled=True, custom_radius=8)
 
             # Voltar botão
             back_btn_y = play_btn_y + 70
@@ -4152,7 +4021,7 @@ async def game_loop():
             else:
                 h_gs = gs
 
-            if client_state.get('is_local', False) or client_state.get('is_live', False):
+            if client_state.get('is_local', False):
                 display_gs = get_cached_serialized_state(client_state, h_gs, h_gs['turn'])
                 if not history_active:
                     client_state['my_color'] = gs['turn']
@@ -4163,6 +4032,18 @@ async def game_loop():
                 draw_board(screen, h_gs, fonts, client_state, mouse)
                 client_state['panel_btns'] = draw_panel(screen, h_gs, fonts, mouse, client_state)
                 draw_sidebar(screen, h_gs, fonts, client_state, mouse)
+
+            if not client_state.get('is_local', False) and gs.get('opponent_left') and not gs.get('game_over'):
+                overlay = pygame.Surface((WIN_W, WIN_H), pygame.SRCALPHA)
+                overlay.fill((0, 0, 0, 180))
+                screen.blit(overlay, (0, 0))
+                
+                draw_text_center(screen, "OPONENTE DESCONECTADO", fonts['big'], T_RED, WIN_H // 2 - 40)
+                draw_text_center(screen, "Aguardando retorno...", fonts['small'], T_DIM, WIN_H // 2)
+                
+                btn_sair = pygame.Rect(WIN_W // 2 - 80, WIN_H // 2 + 50, 160, 40)
+                client_state['panel_btns']['exit_room'] = btn_sair
+                draw_fancy_btn(screen, "Sair da Sala", fonts['small'], BTN_RED, BTN_REDH, BTN_TXT, btn_sair, is_hover=btn_sair.collidepoint(mouse))
 
             # Log modal rendering removed
 

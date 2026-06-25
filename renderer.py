@@ -181,7 +181,6 @@ class RenderCell:
     is_selected: bool = False
     is_legal: bool = False
     is_legal_capture: bool = False
-    is_threatened: bool = False
     blue_path_alpha: int = 0
     orange_path_alpha: int = 0
     is_fake_residual: bool = False
@@ -224,15 +223,6 @@ class BoardRenderer:
         for (lr, lc) in client_state.get('legal_sq', []):
             grid[lr][lc].is_legal = True
             grid[lr][lc].is_legal_capture = bool(tb[lr][lc] or (gs.get('ep') and gs['ep'] == (lr, lc)))
-
-        # Threatened allied pieces
-        if my_color in ('w', 'b'):
-            enemy_color = opp(my_color)
-            for r in range(8):
-                for c in range(8):
-                    if tb[r][c] and pc(tb[r][c]) == my_color:
-                        if attacked(tb, r, c, enemy_color):
-                            grid[r][c].is_threatened = True
 
         # Next queues
         all_nexts = (gs.get('next_queue_w') or []) + (gs.get('next_queue_b') or []) + (client_state.get('draft_moves') or [])

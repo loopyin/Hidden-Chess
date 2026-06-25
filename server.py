@@ -118,9 +118,6 @@ async def handler(websocket):
                     
                     if room_code in games:
                         gs = games[room_code]
-                        if gs.get('is_live_mode'):
-                            await websocket.send(json.dumps({"type": "error", "message": "Esta é uma Sala Live. Entre pelo Modo Live."}))
-                            continue
                         
                         # Reconnection logic
                         if token and 'tokens' in gs:
@@ -158,72 +155,29 @@ async def handler(websocket):
                     else:
                         await websocket.send(json.dumps({"type": "error", "message": "Sala não encontrada ou cheia."}))
 
-                elif data['type'] == 'create_live_room':
-                    room_code = generate_room_code()
-                    new_state = make_state()
-                    new_state['created_at'] = time.time()
-                    new_state['turn_start_snapshot'] = copy.deepcopy(new_state)
-                    new_state['is_live_mode'] = True
-                    games[room_code] = new_state
-                    session_token = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
-                    games[room_code]['tokens'] = {'live_1': session_token}
-                    games[room_code]['online'] = {'live_1': True}
-                    players[websocket] = (room_code, 'live')
-                    await websocket.send(json.dumps({"type": "room_created", "room": room_code, "color": "live", "session_token": session_token}))
-
-                elif data['type'] == 'join_live_room':
-                    room_code = data['room'].upper()
-                    if room_code in games and games[room_code].get('is_live_mode'):
-                        gs = games[room_code]
-                        session_token = ''.join(random.choices(string.ascii_letters + string.digits, k=16))
-                        token_key = f'live_{len(gs.get("tokens", {})) + 1}'
-                        players[websocket] = (room_code, 'live')
-                        if 'tokens' not in gs: gs['tokens'] = {}
-                        if 'online' not in gs: gs['online'] = {}
-                        gs['tokens'][token_key] = session_token
-                        gs['online'][token_key] = True
-                        gs['opponent_joined'] = True
-                        await websocket.send(json.dumps({"type": "room_joined", "room": room_code, "color": "live", "session_token": session_token}))
-                        await broadcast_state(room_code)
-                    else:
-                        await websocket.send(json.dumps({"type": "error", "message": "Sala Live não encontrada."}))
-
                 elif data['type'] == 'leave_room':
                     room_code, color = players.get(websocket, (None, None))
                     if room_code and room_code in games:
                         gs = games[room_code]
                         in_room = [ws for ws, p in players.items() if p[0] == room_code and ws != websocket]
                         if not gs['game_started']:
-                            if gs.get('is_live_mode'):
-                                if len(in_room) == 0:
-                                    del games[room_code]
-                                    if room_code in room_timers:
-                                        room_timers[room_code].cancel()
-                                        active_timers.discard(room_timers[room_code])
-                                        del room_timers[room_code]
-                                else:
-                                    pass # People are still in the live room lobby
-                            else:
-                                for opp_ws in in_room:
-                                    try:
-                                        await opp_ws.send(
-                                            json.dumps({"type": "error", "message": "O oponente saiu do lobby."}))
-                                    except websockets.exceptions.ConnectionClosed:
-                                        pass
-                                del games[room_code]
+                            for opp_ws in in_room:
+                                try:
+                                    await opp_ws.send(
+                                        json.dumps({"type": "error", "message": "O oponente saiu do lobby."}))
+                                except websockets.exceptions.ConnectionClosed:
+                                    pass
+                            del games[room_code]
 
-                                if room_code in room_timers:
-                                    room_timers[room_code].cancel()
-                                    active_timers.discard(room_timers[room_code])
-                                    del room_timers[room_code]
+                            if room_code in room_timers:
+                                room_timers[room_code].cancel()
+                                active_timers.discard(room_timers[room_code])
+                                del room_timers[room_code]
                         else:
                             if 'online' in gs and color:
-                                # For live mode, color is 'live', which marks all live viewers offline? 
-                                # Better to just not care for live mode since reconnect works nicely.
                                 gs['online'][color] = False
                             
-                            if not gs.get('is_live_mode'):
-                                gs['opponent_left'] = True
+                            gs['opponent_left'] = True
                             await broadcast_state(room_code)
                     players.pop(websocket, None)
 
@@ -236,31 +190,37 @@ async def handler(websocket):
                     action = data['action']
 
                     if action == 'set_fakeout_mode':
-                        if color == 'w' or gs.get('is_live_mode'):
+                        if color == 'w':
                             gs['fakeout_mode_enabled'] = data.get('fakeout_mode_enabled', False)
                             await broadcast_state(room_code)
                         continue
 
                     elif action == 'set_disable_undo':
-                        if color == 'w' or gs.get('is_live_mode'):
+                        if color == 'w':
                             gs['disable_undo_placeholder'] = data.get('disable_undo_placeholder', False)
                             await broadcast_state(room_code)
                         continue
 
                     elif action == 'set_score_to_win':
-                        if color == 'w' or gs.get('is_live_mode'):
+                        if color == 'w':
                             gs['score_to_win'] = data.get('score_to_win', False)
                             await broadcast_state(room_code)
                         continue
 
                     elif action == 'set_ice_king':
-                        if color == 'w' or gs.get('is_live_mode'):
+                        if color == 'w':
                             gs['ice_king_enabled'] = data.get('ice_king_enabled', False)
                             await broadcast_state(room_code)
                         continue
 
+                    elif action == 'set_ready':
+                        if color == 'b':
+                            gs['guest_ready'] = data.get('guest_ready', False)
+                            await broadcast_state(room_code)
+                        continue
+
                     elif action == 'start_game':
-                        if (color == 'w' or gs.get('is_live_mode')) and (gs.get('opponent_joined', False) or gs.get('is_live_mode')):
+                        if color == 'w' and gs.get('opponent_joined', False) and gs.get('guest_ready', False):
                             gs['game_started'] = True
                             if room_code in room_timers:
                                 room_timers[room_code].cancel()
@@ -306,22 +266,16 @@ async def handler(websocket):
                     if action == 'resign':
                         if not gs['game_over']:
                             gs['game_over'] = True
-                            if gs.get('is_live_mode'):
-                                gs['game_over_msg'] = "Jogo encerrado!"
-                            else:
-                                winner = "Pretas" if color == 'w' else "Brancas"
-                                resigner = "As Brancas" if color == 'w' else "As Pretas"
-                                gs['game_over_msg'] = f"{resigner} abandonaram. As {winner} venceram!"
+                            winner = "Pretas" if color == 'w' else "Brancas"
+                            resigner = "As Brancas" if color == 'w' else "As Pretas"
+                            gs['game_over_msg'] = f"{resigner} abandonaram. As {winner} venceram!"
                             await broadcast_state(room_code)
                         continue
 
-                    if not gs.get('is_live_mode') and gs['turn'] != color:
+                    if gs['turn'] != color:
                         continue
 
-                    if gs.get('is_live_mode'):
-                        effective_color = gs['turn']
-                    else:
-                        effective_color = color
+                    effective_color = color
 
                     if action == 'undo' and gs.get('disable_undo_placeholder', False):
                         continue
