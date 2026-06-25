@@ -20,9 +20,12 @@ class MovePiece(Action):
 
     def execute(self, gs):
         from chess_logic import exec_move
+        old_fakeout = gs.get('fakeout_active', False)
         if self.fakeout:
             gs['fakeout_active'] = True
-        return exec_move(gs, self.fr, self.fc, self.tr, self.tc, hidden_move=self.hidden, promo=self.promo)
+        res = exec_move(gs, self.fr, self.fc, self.tr, self.tc, hidden_move=self.hidden, promo=self.promo)
+        gs['fakeout_active'] = old_fakeout
+        return res
     
     def post_execute(self, gs, client_state, play_sound_fn):
         # Auto-trigger next if it's a Normal or Hidden move, NOT a Fakeout

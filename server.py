@@ -355,6 +355,7 @@ async def handler(websocket):
                                         gs['log'].append(f"NEXT|{effective_color}|{note_msg}")
                             
                             end_turn(gs)
+                            process_next_queues(gs)
                         else:
                             # No manual move, execute from queue
                             if dm:
@@ -370,6 +371,7 @@ async def handler(websocket):
                                 process_next_queues(gs)
                             else:
                                 end_turn(gs)
+                                process_next_queues(gs)
                         
                         clean_snapshot = copy.deepcopy(gs)
                         clean_snapshot.pop('turn_start_snapshot', None)
@@ -465,10 +467,18 @@ async def handler(websocket):
                                     continue
 
                                 gesture_hidden = data.get('gesture_hidden', False) and gs.get('disable_undo_placeholder', False)
+                                gesture_fakeout = data.get('gesture_fakeout', False) and gs.get('disable_undo_placeholder', False)
+                                
                                 is_hidden = gs.get('hidden_mode', False) or gesture_hidden
-                                is_fakeout = gs.get('fakeout_active', False)
+                                is_fakeout = gs.get('fakeout_active', False) or gesture_fakeout
+                                
+                                old_fakeout = gs.get('fakeout_active', False)
+                                gs['fakeout_active'] = is_fakeout
+                                
                                 res = exec_move(gs, fr, fc, tr, tc, hidden_move=is_hidden, promo=promo)
                                 if res:
+                                    gs['hidden_mode'] = False
+                                    gs['fakeout_active'] = False
                                     if 'current_turn_actions' not in gs: gs['current_turn_actions'] = []
                                     gs['current_turn_actions'].append({
                                         'type': 'move',
@@ -476,6 +486,8 @@ async def handler(websocket):
                                         'promo': promo, 'hidden': is_hidden,
                                         'fakeout': is_fakeout
                                     })
+                                else:
+                                    gs['fakeout_active'] = old_fakeout
                                 await broadcast_state(room_code)
                                 gs['ghost_capture_flash'] = None
                                 gs['ghost_capture_type'] = None

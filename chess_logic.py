@@ -548,11 +548,8 @@ def compare_turns(actions1, actions2):
 
 def process_next_queues(gs):
     from actions import deserialize_action, EndTurn, MovePiece
-    starting_color = gs['turn']
     while not gs['game_over']:
         c = gs['turn']
-        if c != starting_color:
-            break
         q_key = f'next_queue_{c}'
         if not gs.get(q_key):
             break

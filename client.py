@@ -1250,14 +1250,6 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         if is_active:
             b_color = (245, 120, 20) if key == 'fakeout' else (80, 120, 220)
             
-        if key == 'end':
-            if is_clicked:
-                base_color = (40, 160, 80)
-                hover_color = (60, 180, 100)
-            else:
-                base_color = (70, 70, 75)
-                hover_color = (90, 90, 95)
-            
         draw_fancy_btn(screen, text, fonts['ui'], base_color, hover_color, BTN_TXT, rect, is_hover=is_hover, is_disabled=not is_enabled, border_color=b_color, custom_radius=6)
         btns[key] = rect
 
@@ -1350,7 +1342,7 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         end_en = not history_active and turn == my_color and (gs['normal_done'] or gs['hidden_count'] > 0 or gs.get(f'next_queue_{turn}'))
         if client_state.get('draft_moves'):
             end_en = check_draft_endable(client_state['draft_moves'], end_en)
-        draw_btn(488, 64, 'end', 'pronto', end_en, False, BTN_END, BTN_ENDH)
+        draw_btn(488, 64, 'end', 'Finalizar', end_en, False, BTN_END, BTN_ENDH)
 
     # Replay button and log buttons removed during mid-game.
 
@@ -1693,13 +1685,15 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
 
             if client_state.get('drafting'):
                 is_hidden_move = client_state.get('draft_hidden', False) or client_state.get('hidden_triggered', False)
+                is_fakeout_move = client_state.get('draft_fakeout', False) or client_state.get('fakeout_triggered', False)
             else:
                 is_hidden_move = gs.get('hidden_mode', False) or client_state.get('hidden_triggered', False)
+                is_fakeout_move = gs.get('fakeout_active', False) or client_state.get('fakeout_triggered', False)
 
             if client_state.get('drafting'):
                 d_moves = client_state.get('draft_moves', [])
                 dgs = get_draft_state(gs, d_moves)
-                dgs['fakeout_active'] = client_state.get('draft_fakeout', False)
+                dgs['fakeout_active'] = is_fakeout_move
                 dgs['hidden_mode'] = is_hidden_move
                 legals = legal(dgs, sr, sc)
                 if (r, c) in legals:
@@ -1708,7 +1702,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                         'type': 'move',
                         'fr': sr, 'fc': sc, 'tr': r, 'tc': c,
                         'hidden': is_hidden_move,
-                        'fakeout': client_state.get('draft_fakeout', False),
+                        'fakeout': is_fakeout_move,
                         'promo': promo,
                         'drafted_turn': (gs['turn_count'] + 1) // 2
                     })
@@ -1730,14 +1724,20 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                     if gs.get('board') and 0 <= r < 8 and 0 <= c < 8:
                         has_captured_piece_on_square = gs['board'][r][c] is not None
                         
-                    is_fakeout = gs.get('fakeout_active', False)
+                    old_fakeout_active = gs.get('fakeout_active', False)
+                    gs['fakeout_active'] = is_fakeout_move
+                    
                     res = exec_move(gs, sr, sc, r, c, hidden_move=is_hidden_move, promo=promo)
                     if res:
+                        gs['hidden_mode'] = False
+                        gs['fakeout_active'] = False
                         if 'current_turn_actions' not in gs: gs['current_turn_actions'] = []
                         gs['current_turn_actions'].append({
                             'type': 'move', 'fr': sr, 'fc': sc, 'tr': r, 'tc': c,
-                            'promo': promo, 'hidden': is_hidden_move, 'fakeout': is_fakeout
+                            'promo': promo, 'hidden': is_hidden_move, 'fakeout': is_fakeout_move
                         })
+                    else:
+                        gs['fakeout_active'] = old_fakeout_active
                     
                     new_last = gs.get('last_move')
                     
@@ -1797,7 +1797,9 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                 else:
                     move_cmd = {
                         "type": "action", "action": "move",
-                        "fr": sr, "fc": sc, "tr": r, "tc": c, "promo": promo, "gesture_hidden": is_hidden_move
+                        "fr": sr, "fc": sc, "tr": r, "tc": c, "promo": promo, 
+                        "gesture_hidden": is_hidden_move,
+                        "gesture_fakeout": is_fakeout_move
                     }
                     await websocket.send(json.dumps(move_cmd))
                     client_state['selected'] = None
@@ -2338,7 +2340,7 @@ async def game_loop():
                     if gs.get('game_started', False):
                         if app_state != "PLAYING":
                             play_sound('start')
-                        app_state = "PLAYING"
+                            app_state = "PLAYING"
                         pygame.display.set_caption(
                             f"Hidden Chess - Jogando de {'Brancas' if client_state['my_color'] == 'w' else 'Pretas'} (Sala: {client_state['room_code']})")
                     else:
@@ -2918,6 +2920,7 @@ async def game_loop():
                                                 note_msg = f"{htxt}{alg(m['fc'], m['fr'])} -> {alg(m['tc'], m['tr'])}"
                                                 gs['log'].append(f"NEXT|{gs['turn']}|{note_msg}")
                                     end_turn(gs)
+                                    process_next_queues(gs)
                                 else:
                                     # No manual move, append new drafts to existing queue
                                     if dm_copy and dm:
@@ -2933,6 +2936,7 @@ async def game_loop():
                                         process_next_queues(gs)
                                     else:
                                         end_turn(gs)
+                                        process_next_queues(gs)
                                 if in_check(get_absolute_board(gs), gs['turn']):
                                     play_sound('check')
                                 if gs.get('reveal_flashes'):
@@ -3153,6 +3157,7 @@ async def game_loop():
                                                 if q_key_btn not in gs: gs[q_key_btn] = []
                                                 gs[q_key_btn].extend(dm_copy)
                                             end_turn(gs)
+                                            process_next_queues(gs)
                                         else:
                                             # No manual move, append new drafts
                                             if dm_copy and dm:
@@ -3163,6 +3168,7 @@ async def game_loop():
                                                 process_next_queues(gs)
                                             else:
                                                 end_turn(gs)
+                                                process_next_queues(gs)
                                         if in_check(get_absolute_board(gs), gs['turn']):
                                             play_sound('check')
                                         if gs.get('reveal_flashes'):
@@ -3285,6 +3291,7 @@ async def game_loop():
                                                 if q_key_sq not in gs: gs[q_key_sq] = []
                                                 gs[q_key_sq].extend(dm_copy)
                                             end_turn(gs)
+                                            process_next_queues(gs)
                                         else:
                                             # No manual move
                                             if dm_copy and dm:
@@ -3295,6 +3302,7 @@ async def game_loop():
                                                 process_next_queues(gs)
                                             else:
                                                 end_turn(gs)
+                                                process_next_queues(gs)
                                         if in_check(get_absolute_board(gs), gs['turn']):
                                             play_sound('check')
                                         if gs.get('reveal_flashes'):
