@@ -477,8 +477,13 @@ async def handler(websocket):
                                 gesture_hidden = data.get('gesture_hidden', False)
                                 gesture_fakeout = data.get('gesture_fakeout', False)
                                 
-                                is_hidden = gs.get('hidden_mode', False) or gesture_hidden
-                                is_fakeout = gs.get('fakeout_active', False) or gesture_fakeout
+                                if gesture_hidden:
+                                    gs['hidden_mode'] = True
+                                if gesture_fakeout:
+                                    gs['fakeout_active'] = True
+                                
+                                is_hidden = gs.get('hidden_mode', False)
+                                is_fakeout = gs.get('fakeout_active', False)
                                 
                                 old_fakeout = gs.get('fakeout_active', False)
                                 gs['fakeout_active'] = is_fakeout
