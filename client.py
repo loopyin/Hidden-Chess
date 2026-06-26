@@ -5,6 +5,7 @@ import websockets
 import ssl
 import traceback
 from collections import deque
+from debugger import debugger
 from chess_logic import GLYPHS, pt, pc, get_absolute_board, get_true_board, in_check, hidden_cost, check_conflict, \
     legal, serialize_state, deserialize_state, make_state, can_afford, can_afford_fakeout, exec_move, end_turn, alg, deactivate_plies, get_ui_selection, \
     process_next_queues, get_next_turn_from_queue, pop_next_turn_from_queue, compare_turns, ice_king_interaction
@@ -226,6 +227,16 @@ def send_ws_msg(client_state, websocket, msg_dict):
     if 'out_msg_queue' not in client_state:
         client_state['out_msg_queue'] = deque()
     client_state['out_msg_queue'].append(json.dumps(msg_dict))
+
+async def send_ws_direct(ws, msg):
+    if ws is None:
+        return
+    try:
+        data = json.loads(msg)
+        debugger.log_network("send", data.get('type', 'unknown'), data)
+    except:
+        pass
+    await ws.send(msg)
 
 async def sync_gesture_begin(websocket, client_state, *, timer=0.0, source_sq=None, source_piece=None):
     gesture_state = build_gesture_state(
@@ -1643,7 +1654,7 @@ async def perform_undo_action(client_state, gs, is_local, websocket):
                         if p_anim:
                             trigger_piece_anim(client_state, p_anim, tr_u, tc_u, fr_u, fc_u, False, False, False)
                 else:
-                    await websocket.send(json.dumps({"type": "action", "action": "undo"}))
+                    await send_ws_direct(websocket, json.dumps({"type": "action", "action": "undo"}))
             client_state['selected'] = None
             client_state['legal_sq'] = []
         else:
@@ -1662,7 +1673,7 @@ async def perform_undo_action(client_state, gs, is_local, websocket):
                     if p_anim:
                         trigger_piece_anim(client_state, p_anim, tr_u, tc_u, fr_u, fc_u, False, False, False)
             else:
-                await websocket.send(json.dumps({"type": "action", "action": "undo"}))
+                await send_ws_direct(websocket, json.dumps({"type": "action", "action": "undo"}))
             client_state['selected'] = None
             client_state['legal_sq'] = []
     else:
@@ -1687,6 +1698,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
             client_state['selected'] = None
             client_state['legal_sq'] = []
             client_state['is_dragging_gesture'] = False
+            debugger.log_event("client", "gesture_cancelled", {"reason": "released_on_source"})
             client_state['hidden_triggered'] = False
             client_state['fakeout_triggered'] = False
             await sync_gesture_cancel(websocket, client_state)
@@ -1855,11 +1867,11 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                         "gesture_hidden": is_hidden_move,
                         "gesture_fakeout": is_fakeout_move
                     }
-                    await websocket.send(json.dumps(move_cmd))
+                    await send_ws_direct(websocket, json.dumps(move_cmd))
                     client_state['selected'] = None
                     client_state['legal_sq'] = []
                     client_state['gesture_state'] = default_gesture_state()
-            
+            debugger.log_event('client', 'gesture_completed', {'target': (r, c)})
             client_state['is_dragging_gesture'] = False
             client_state['hidden_triggered'] = False
             client_state['fakeout_triggered'] = False
@@ -1867,6 +1879,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
         else:
             # Release on an invalid square -> Red pulse
             trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+            debugger.log_event('client', 'gesture_cancelled', {'reason': 'invalid_square'})
             client_state['is_dragging_gesture'] = False
             client_state['hidden_triggered'] = False
             client_state['fakeout_triggered'] = False
@@ -1877,6 +1890,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
             client_state['legal_sq'] = []
     else:
         # Released outside the board -> Reset state
+        debugger.log_event('client', 'gesture_cancelled', {'reason': 'outside_board'})
         client_state['is_dragging_gesture'] = False
         client_state['hidden_triggered'] = False
         client_state['fakeout_triggered'] = False
@@ -1916,7 +1930,7 @@ async def ws_sender_task(websocket, client_state):
             if client_state.get('out_msg_queue'):
                 msg = client_state['out_msg_queue'].popleft()
                 try:
-                    await websocket.send(msg)
+                    await send_ws_direct(websocket, msg)
                 except Exception as e:
                     print(f"WS Send exception: {e}")
                     # If socket is closed, we'll break or let it fail
@@ -1940,9 +1954,9 @@ async def connect_and_join(uri, action, room_code=None, token=None):
         try:
             ws = await asyncio.wait_for(websockets.connect(uri, **kwargs), timeout=20)
             if action == "create_room":
-                await ws.send(json.dumps({"type": "create_room"}))
+                await send_ws_direct(ws, json.dumps({"type": "create_room"}))
             elif action == "join_room":
-                await ws.send(json.dumps({"type": "join_room", "room": room_code, "session_token": token}))
+                await send_ws_direct(ws, json.dumps({"type": "join_room", "room": room_code, "session_token": token}))
             
             # Wait for initial response to confirm it didn't just hang
             msg = await asyncio.wait_for(ws.recv(), timeout=10)
@@ -2037,7 +2051,11 @@ async def game_loop():
 
     def start_local_game(is_test=False):
         nonlocal gs, client_state, app_state
+        debugger.reset()
+        debugger.init_metadata("local" if not is_test else "test")
+        debugger.log_event("client", "game_created", {"is_test": is_test})
         gs = make_state()
+        debugger.log_snapshot(gs, "game_created")
         gs['game_started'] = False
         client_state = {
             'my_color': 'w',
@@ -2254,14 +2272,21 @@ async def game_loop():
                 while client_state['msg_queue']:
                     msg = client_state['msg_queue'].popleft()
                     data = json.loads(msg)
+                    debugger.log_network("receive", data.get('type', 'unknown'), data)
 
                     if data['type'] == 'room_created':
+                        debugger.reset()
+                        debugger.init_metadata("online_host", {"room": data['room']})
+                        debugger.log_event("client", "room_created", data)
                         client_state['room_code'] = data['room']
                         client_state['my_color'] = data['color']
                         app_state = "LOBBY"
                         save_session(data['room'], data.get('session_token'))
 
                     elif data['type'] == 'room_joined':
+                        debugger.reset()
+                        debugger.init_metadata("online_guest", {"room": data['room']})
+                        debugger.log_event("client", "room_joined", data)
                         client_state['room_code'] = data['room']
                         client_state['my_color'] = data['color']
                         client_state['flipped'] = (data['color'] == 'b')
@@ -2303,168 +2328,170 @@ async def game_loop():
                     elif data['type'] == 'state_update':
                         client_state['waiting'] = False
                         new_gs = deserialize_state(data['state'])
+                        debugger.log_snapshot(new_gs, "after_network_receive")
                         if not client_state.get('is_dragging_gesture'):
                             client_state['gesture_state'] = new_gs.get('gesture_state', default_gesture_state())
                     
-                    if new_gs.get('game_over') and not gs.get('game_over'):
-                        play_sound('game_over')
-                    elif gs.get('last_move') != new_gs.get('last_move') and new_gs.get('last_move') or len(new_gs.get('log', [])) != len(gs.get('log', [])):
-                        fr, fc, tr, tc = new_gs.get('last_move', (None, None, None, None))
-                        
-                        # Detect any captured piece on destination square before the move
-                        has_captured_piece_on_square = False
-                        move_changed = gs.get('last_move') != new_gs.get('last_move')
-                        
-                        if move_changed and gs.get('board') and tr is not None and tc is not None and 0 <= tr < 8 and 0 <= tc < 8:
-                            has_captured_piece_on_square = gs['board'][tr][tc] is not None
-                        
-                        # Robust check of all new log entries to see if any represent a capture
-                        new_log_entries = []
-                        if gs.get('log') and len(new_gs.get('log', [])) > len(gs['log']):
-                            new_log_entries = new_gs['log'][len(gs['log']):]
-                        
-                        is_capture_by_log = False
-                        for entry in new_log_entries:
-                            norm_entry = entry.lower()
-                            if "capturado" in norm_entry or "capturada" in norm_entry:
-                                is_capture_by_log = True
-                                break
-                            if 'x' in norm_entry:
-                                without_xeque = norm_entry.replace("xeque", "")
-                                if 'x' in without_xeque:
+                        if new_gs.get('game_over') and not gs.get('game_over'):
+                            play_sound('game_over')
+                        elif gs.get('last_move') != new_gs.get('last_move') and new_gs.get('last_move') or len(new_gs.get('log', [])) != len(gs.get('log', [])):
+                            fr, fc, tr, tc = new_gs.get('last_move', (None, None, None, None))
+                            
+                            # Detect any captured piece on destination square before the move
+                            has_captured_piece_on_square = False
+                            move_changed = gs.get('last_move') != new_gs.get('last_move')
+                            
+                            if move_changed and gs.get('board') and tr is not None and tc is not None and 0 <= tr < 8 and 0 <= tc < 8:
+                                has_captured_piece_on_square = gs['board'][tr][tc] is not None
+                            
+                            # Robust check of all new log entries to see if any represent a capture
+                            new_log_entries = []
+                            if gs.get('log') and len(new_gs.get('log', [])) > len(gs['log']):
+                                new_log_entries = new_gs['log'][len(gs['log']):]
+                            
+                            is_capture_by_log = False
+                            for entry in new_log_entries:
+                                norm_entry = entry.lower()
+                                if "capturado" in norm_entry or "capturada" in norm_entry:
                                     is_capture_by_log = True
                                     break
-                        
-                        cap_w = len(new_gs.get('captured_w', [])) > len(gs.get('captured_w', []))
-                        cap_b = len(new_gs.get('captured_b', [])) > len(gs.get('captured_b', []))
-                        is_capture = cap_w or cap_b or has_captured_piece_on_square or is_capture_by_log
-                        
-                        last_log = new_gs['log'][-1] if new_gs.get('log') else ""
-                        is_shadow = "HIDDEN" in last_log
-                        is_fakeout = "FAKEOUT" in last_log
-                        
-                        is_next_move = "[next]" in last_log.lower() if last_log else False
-                        
-                        abs_b_new = get_absolute_board(new_gs)
+                                if 'x' in norm_entry:
+                                    without_xeque = norm_entry.replace("xeque", "")
+                                    if 'x' in without_xeque:
+                                        is_capture_by_log = True
+                                        break
                             
-                        if move_changed or is_capture_by_log or is_next_move:
-                            if in_check(abs_b_new, new_gs['turn']):
-                                play_sound('check')
-                            elif is_capture:
-                                play_sound('capture')
-                            elif is_next_move:
-                                play_sound('next_move')
-                            else:
-                                play_sound('move')
+                            cap_w = len(new_gs.get('captured_w', [])) > len(gs.get('captured_w', []))
+                            cap_b = len(new_gs.get('captured_b', [])) > len(gs.get('captured_b', []))
+                            is_capture = cap_w or cap_b or has_captured_piece_on_square or is_capture_by_log
+                            
+                            last_log = new_gs['log'][-1] if new_gs.get('log') else ""
+                            is_shadow = "HIDDEN" in last_log
+                            is_fakeout = "FAKEOUT" in last_log
+                            
+                            is_next_move = "[next]" in last_log.lower() if last_log else False
+                            
+                            abs_b_new = get_absolute_board(new_gs)
+                                
+                            if move_changed or is_capture_by_log or is_next_move:
+                                if in_check(abs_b_new, new_gs['turn']):
+                                    play_sound('check')
+                                elif is_capture:
+                                    play_sound('capture')
+                                elif is_next_move:
+                                    play_sound('next_move')
+                                else:
+                                    play_sound('move')
+                            
+                            is_undo = new_gs.get('turn_count', 0) < gs.get('turn_count', 0) or (new_gs.get('turn_count', 0) == gs.get('turn_count', 0) and len(new_gs.get('log', [])) < len(gs.get('log', [])))
+
+                            if is_undo:
+                                if gs.get('last_move'):
+                                    fr_u, fc_u, tr_u, tc_u = gs['last_move']
+                                    p_anim = gs['board'][tr_u][tc_u]
+                                    if not p_anim:
+                                        for h_key in ['hidden_w', 'hidden_b']:
+                                            h_dict = gs.get(h_key, {})
+                                            pos_key = (tr_u, tc_u)
+                                            if pos_key in h_dict:
+                                                p_anim = h_dict[pos_key].piece
+                                                break
+                                    if p_anim:
+                                        trigger_piece_anim(client_state, p_anim, tr_u, tc_u, fr_u, fc_u, is_shadow=False, is_fakeout=False, is_capture=False)
+                            elif move_changed:
+                                if new_gs.get('last_move'):
+                                    fr, fc, tr, tc = new_gs['last_move']
+                                    p_anim = new_gs['board'][tr][tc]
+                                    if not p_anim:
+                                        for h_key in ['hidden_w', 'hidden_b']:
+                                            h_dict = new_gs.get(h_key, {})
+                                            pos_key = (tr, tc)
+                                            if pos_key in h_dict:
+                                                p_anim = h_dict[pos_key].piece
+                                                break
+                                    if p_anim:
+                                        trigger_piece_anim(client_state, p_anim, fr, fc, tr, tc, is_shadow, is_fakeout, is_capture)
                         
-                        is_undo = new_gs.get('turn_count', 0) < gs.get('turn_count', 0) or (new_gs.get('turn_count', 0) == gs.get('turn_count', 0) and len(new_gs.get('log', [])) < len(gs.get('log', [])))
+                        client_state['drafting'] = False
+                        client_state['draft_moves'] = []
 
-                        if is_undo:
-                            if gs.get('last_move'):
-                                fr_u, fc_u, tr_u, tc_u = gs['last_move']
-                                p_anim = gs['board'][tr_u][tc_u]
-                                if not p_anim:
-                                    for h_key in ['hidden_w', 'hidden_b']:
-                                        h_dict = gs.get(h_key, {})
-                                        pos_key = (tr_u, tc_u)
-                                        if pos_key in h_dict:
-                                            p_anim = h_dict[pos_key].piece
-                                            break
-                                if p_anim:
-                                    trigger_piece_anim(client_state, p_anim, tr_u, tc_u, fr_u, fc_u, is_shadow=False, is_fakeout=False, is_capture=False)
-                        elif move_changed:
-                            if new_gs.get('last_move'):
-                                fr, fc, tr, tc = new_gs['last_move']
-                                p_anim = new_gs['board'][tr][tc]
-                                if not p_anim:
-                                    for h_key in ['hidden_w', 'hidden_b']:
-                                        h_dict = new_gs.get(h_key, {})
-                                        pos_key = (tr, tc)
-                                        if pos_key in h_dict:
-                                            p_anim = h_dict[pos_key].piece
-                                            break
-                                if p_anim:
-                                    trigger_piece_anim(client_state, p_anim, fr, fc, tr, tc, is_shadow, is_fakeout, is_capture)
-                    
-                    client_state['drafting'] = False
-                    client_state['draft_moves'] = []
-
-                    if 'turn_history' not in client_state:
-                        client_state['turn_history'] = []
-                        client_state['history_index'] = 0
-
-                    if new_gs.get('game_started', False):
-                        if not client_state['turn_history']:
-                            client_state['turn_history'] = [copy.deepcopy(new_gs)]
+                        if 'turn_history' not in client_state:
+                            client_state['turn_history'] = []
                             client_state['history_index'] = 0
-                        else:
-                            last_gs = client_state['turn_history'][-1]
-                            if (last_gs['game_over'] and not new_gs['game_over']) or (new_gs['turn_count'] == 1 and last_gs['turn_count'] > 1):
+
+                        if new_gs.get('game_started', False):
+                            if not client_state['turn_history']:
                                 client_state['turn_history'] = [copy.deepcopy(new_gs)]
                                 client_state['history_index'] = 0
-                                client_state.pop('export_success_msg', None)
-                            elif (new_gs['turn'] != last_gs['turn'] or 
-                                  new_gs['turn_count'] != last_gs['turn_count'] or 
-                                  (new_gs['game_over'] and not last_gs['game_over'])):
-                                client_state['turn_history'].append(copy.deepcopy(new_gs))
-                                if client_state.get('history_index', 0) == len(client_state['turn_history']) - 2:
-                                    client_state['history_index'] = len(client_state['turn_history']) - 1
+                            else:
+                                last_gs = client_state['turn_history'][-1]
+                                if (last_gs['game_over'] and not new_gs['game_over']) or (new_gs['turn_count'] == 1 and last_gs['turn_count'] > 1):
+                                    client_state['turn_history'] = [copy.deepcopy(new_gs)]
+                                    client_state['history_index'] = 0
+                                    client_state.pop('export_success_msg', None)
+                                elif (new_gs['turn'] != last_gs['turn'] or 
+                                      new_gs['turn_count'] != last_gs['turn_count'] or 
+                                      (new_gs['game_over'] and not last_gs['game_over'])):
+                                    client_state['turn_history'].append(copy.deepcopy(new_gs))
+                                    if client_state.get('history_index', 0) == len(client_state['turn_history']) - 2:
+                                        client_state['history_index'] = len(client_state['turn_history']) - 1
 
-                    if new_gs.get('ghost_capture_flash'):
-                        gr, gc_pos = new_gs['ghost_capture_flash']
-                        gctype = new_gs.get('ghost_capture_type')
-                        col = (245, 120, 20) if gctype == 'fakeout' else (60, 110, 220)
-                        trigger_square_flash(client_state, gr, gc_pos, col, gctype)
+                        if new_gs.get('ghost_capture_flash'):
+                            gr, gc_pos = new_gs['ghost_capture_flash']
+                            gctype = new_gs.get('ghost_capture_type')
+                            col = (245, 120, 20) if gctype == 'fakeout' else (60, 110, 220)
+                            trigger_square_flash(client_state, gr, gc_pos, col, gctype)
 
-                    if new_gs.get('reveal_flashes'):
-                        for rf in new_gs['reveal_flashes']:
-                            rr, rc = rf[0], rf[1]
-                            rtype = rf[2] if len(rf) > 2 else 'hidden'
-                            col = (245, 120, 20) if rtype == 'fakeout' else (60, 110, 220)
-                            trigger_square_flash(client_state, rr, rc, col, rtype)
+                        if new_gs.get('reveal_flashes'):
+                            for rf in new_gs['reveal_flashes']:
+                                rr, rc = rf[0], rf[1]
+                                rtype = rf[2] if len(rf) > 2 else 'hidden'
+                                col = (245, 120, 20) if rtype == 'fakeout' else (60, 110, 220)
+                                trigger_square_flash(client_state, rr, rc, col, rtype)
 
-                    if new_gs['turn'] != gs['turn']:
-                        client_state['resign_confirm'] = False
+                        if new_gs['turn'] != gs['turn']:
+                            client_state['resign_confirm'] = False
 
-                    if client_state['selected']:
-                        r, c = client_state['selected']
-                        effective_col = client_state['my_color']
-                        tb = get_true_board(new_gs, effective_col)
-                        p = tb[r][c]
+                        if client_state['selected']:
+                            r, c = client_state['selected']
+                            effective_col = client_state['my_color']
+                            tb = get_true_board(new_gs, effective_col)
+                            p = tb[r][c]
 
-                        if p and pc(p) == effective_col and new_gs['turn'] == effective_col:
-                            client_state['legal_sq'] = legal(new_gs, r, c)
+                            if p and pc(p) == effective_col and new_gs['turn'] == effective_col:
+                                client_state['legal_sq'] = legal(new_gs, r, c)
+                            else:
+                                client_state['selected'] = None
+                                client_state['legal_sq'] = []
+
+                        gs = new_gs
+                        if gs.get('game_started', False):
+                            if app_state != "PLAYING":
+                                play_sound('start')
+                                app_state = "PLAYING"
+                            pygame.display.set_caption(
+                                f"Hidden Chess - Jogando de {'Brancas' if client_state['my_color'] == 'w' else 'Pretas'} (Sala: {client_state['room_code']})")
                         else:
-                            client_state['selected'] = None
-                            client_state['legal_sq'] = []
+                            app_state = "LOBBY"
+                            client_state['fakeout_mode_enabled'] = gs.get('fakeout_mode_enabled', False)
+                            client_state['disable_undo_placeholder'] = gs.get('disable_undo_placeholder', False)
+                            client_state['score_to_win'] = gs.get('score_to_win', False)
+                            client_state['ice_king_enabled'] = gs.get('ice_king_enabled', False)
 
-                    gs = new_gs
-                    if gs.get('game_started', False):
-                        if app_state != "PLAYING":
-                            play_sound('start')
-                            app_state = "PLAYING"
-                        pygame.display.set_caption(
-                            f"Hidden Chess - Jogando de {'Brancas' if client_state['my_color'] == 'w' else 'Pretas'} (Sala: {client_state['room_code']})")
-                    else:
-                        app_state = "LOBBY"
-                        client_state['fakeout_mode_enabled'] = gs.get('fakeout_mode_enabled', False)
-                        client_state['disable_undo_placeholder'] = gs.get('disable_undo_placeholder', False)
-                        client_state['score_to_win'] = gs.get('score_to_win', False)
-                        client_state['ice_king_enabled'] = gs.get('ice_king_enabled', False)
-
-                elif data['type'] == 'error':
-                    error_msg = data['message']
-                    if error_msg == "Room not found or full." or error_msg == "Room not found or full":
-                        error_msg = "Sala não encontrada ou cheia."
-                    elif error_msg == "Room not found." or error_msg == "Room not found":
-                        error_msg = "Sala não encontrada."
-                    app_state = "MENU"
-                    if websocket:
-                        await websocket.close()
-                        websocket = None
-                        client_state['ws_task'] = None
+                    elif data['type'] == 'error':
+                        error_msg = data['message']
+                        if error_msg == "Room not found or full." or error_msg == "Room not found or full":
+                            error_msg = "Sala não encontrada ou cheia."
+                        elif error_msg == "Room not found." or error_msg == "Room not found":
+                            error_msg = "Sala não encontrada."
+                        app_state = "MENU"
+                        if websocket:
+                            await websocket.close()
+                            websocket = None
+                            client_state['ws_task'] = None
 
             except Exception as e:
+                debugger.log_exception(e, "message_processing")
                 print("Message processing error:", e)
 
         # C. Handle local and remote pygame events
@@ -2720,7 +2747,7 @@ async def game_loop():
                 if ev.type == pygame.KEYDOWN:
                     if ev.key == pygame.K_ESCAPE:
                         if websocket:
-                            await websocket.send(json.dumps({"type": "leave_room"}))
+                            await send_ws_direct(websocket, json.dumps({"type": "leave_room"}))
                             await websocket.close()
                             websocket = None
                         app_state = "MENU"
@@ -2753,7 +2780,7 @@ async def game_loop():
                     if back_btn_rect.collidepoint((mx, my)):
                         play_sound('click')
                         if websocket:
-                            await websocket.send(json.dumps({"type": "leave_room"}))
+                            await send_ws_direct(websocket, json.dumps({"type": "leave_room"}))
                             await websocket.close()
                             websocket = None
                         app_state = "MENU"
@@ -2969,7 +2996,7 @@ async def game_loop():
                                     if client_state['draft_hidden']:
                                         client_state['draft_fakeout'] = False
                             else:
-                                await websocket.send(json.dumps({"type": "action", "action": "toggle_hidden"}))
+                                await send_ws_direct(websocket, json.dumps({"type": "action", "action": "toggle_hidden"}))
                     elif ev.key == pygame.K_u and gs['turn'] == active_color and not gs.get('disable_undo_placeholder', False):
                         gs = await perform_undo_action(client_state, gs, is_local, websocket)
                     elif ev.key in (pygame.K_RETURN, pygame.K_SPACE) and gs['turn'] == active_color and not gs.get('disable_undo_placeholder', False):
@@ -3058,9 +3085,9 @@ async def game_loop():
                                     dm_copy.append(m_dict)
                                 if dm_copy and dm_copy[-1].get('type') != 'end_turn':
                                     dm_copy.append({'type': 'end_turn'})
-                                    await websocket.send(json.dumps({"type": "action", "action": "end_turn", "draft_moves": dm_copy}))
+                                    await send_ws_direct(websocket, json.dumps({"type": "action", "action": "end_turn", "draft_moves": dm_copy}))
                                 else:
-                                    await websocket.send(json.dumps({"type": "action", "action": "end_turn"}))
+                                    await send_ws_direct(websocket, json.dumps({"type": "action", "action": "end_turn"}))
                             client_state['drafting'] = False
                             client_state['draft_moves'] = []
                             client_state['selected'] = None
@@ -3083,7 +3110,7 @@ async def game_loop():
                         btns = client_state.get('panel_btns', {})
                         if btns.get('exit_room') and btns['exit_room'].collidepoint((mx, my)):
                             play_sound('click')
-                            await websocket.send(json.dumps({"type": "leave_room"}))
+                            await send_ws_direct(websocket, json.dumps({"type": "leave_room"}))
                             if websocket:
                                 await websocket.close()
                                 websocket = None
@@ -3129,7 +3156,7 @@ async def game_loop():
                                     app_state = "MENU"
                                     client_state['room_code'] = None
                                 else:
-                                    await websocket.send(json.dumps({"type": "leave_room"}))
+                                    await send_ws_direct(websocket, json.dumps({"type": "leave_room"}))
                                     if websocket:
                                         await websocket.close()
                                         websocket = None
@@ -3168,22 +3195,9 @@ async def game_loop():
 
                         if btns.get('debug') and btns['debug'].collidepoint((mx, my)):
                             try:
-                                def debug_encoder(obj):
-                                    if hasattr(obj, '__dict__'):
-                                        return obj.__dict__
-                                    elif isinstance(obj, set):
-                                        return list(obj)
-                                    elif isinstance(obj, tuple):
-                                        return list(obj)
-                                    return str(obj)
-                                
-                                dump_data = {
-                                    'client_state': {k:v for k,v in client_state.items() if k not in ['ws_task', 'msg_queue', 'out_msg_queue', '_serialize_cache', 'panel_btns', 'conn_task', 'gesture_state', 'my_font']},
-                                    'gs': gs
-                                }
-                                filename = f"debug_log_{int(time.time())}.json"
-                                with open(filename, "w", encoding="utf-8") as f_out:
-                                    json.dump(dump_data, f_out, indent=4, ensure_ascii=False, default=debug_encoder)
+                                # We first ensure the final state is captured
+                                debugger.log_snapshot(gs, "manual_debug_dump")
+                                filename = debugger.export()
                                 client_state['export_success_msg'] = f"Debug salvo em {filename}"
                                 if 'log' in gs:
                                     gs['log'].append(f"Debug salvo em {filename}")
@@ -3223,7 +3237,7 @@ async def game_loop():
                                     client_state['_serialize_cache'] = {}
                                     play_sound('game_over')
                                 else:
-                                    await websocket.send(json.dumps({"type": "action", "action": "resign"}))
+                                    await send_ws_direct(websocket, json.dumps({"type": "action", "action": "resign"}))
                                     client_state['resign_confirm'] = False
                                     client_state['_serialize_cache'] = {}
                         else:
@@ -3305,9 +3319,9 @@ async def game_loop():
                                         client_state['history_index'] = len(client_state['turn_history']) - 1
                                 else:
                                     if dm_copy:
-                                        await websocket.send(json.dumps({"type": "action", "action": "end_turn", "draft_moves": dm_copy}))
+                                        await send_ws_direct(websocket, json.dumps({"type": "action", "action": "end_turn", "draft_moves": dm_copy}))
                                     else:
-                                        await websocket.send(json.dumps({"type": "action", "action": "end_turn"}))
+                                        await send_ws_direct(websocket, json.dumps({"type": "action", "action": "end_turn"}))
                                 client_state['drafting'] = False
                                 client_state['draft_moves'] = []
                                 client_state['selected'] = None
@@ -3439,9 +3453,9 @@ async def game_loop():
                                         client_state['history_index'] = len(client_state['turn_history']) - 1
                                 else:
                                     if dm_copy:
-                                        await websocket.send(json.dumps({"type": "action", "action": "end_turn", "draft_moves": dm_copy}))
+                                        await send_ws_direct(websocket, json.dumps({"type": "action", "action": "end_turn", "draft_moves": dm_copy}))
                                     else:
-                                        await websocket.send(json.dumps({"type": "action", "action": "end_turn"}))
+                                        await send_ws_direct(websocket, json.dumps({"type": "action", "action": "end_turn"}))
                                 client_state['drafting'] = False
                                 client_state['draft_moves'] = []
                                 client_state['selected'] = None
@@ -3483,6 +3497,7 @@ async def game_loop():
                                 play_sound('select')
                                 if client_state.get('disable_undo_placeholder', gs.get('disable_undo_placeholder', False)):
                                     client_state['is_dragging_gesture'] = True
+                                    debugger.log_event("client", "gesture_started", {"piece": p_on_sq, "from": (r, c)})
                                     client_state['drag_piece_sq'] = (r, c)
                                     client_state['drag_piece_name'] = p_on_sq
                                     client_state['drag_pos'] = (mx, my)
@@ -3705,7 +3720,7 @@ async def game_loop():
                                                 "gesture_hidden": is_hidden_cmd,
                                                 "gesture_fakeout": is_fakeout_cmd
                                             }
-                                            await websocket.send(json.dumps(move_cmd))
+                                            await send_ws_direct(websocket, json.dumps(move_cmd))
                                             client_state['selected'] = None
                                             client_state['legal_sq'] = []
                                             client_state['is_dragging_gesture'] = False
