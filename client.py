@@ -1292,20 +1292,22 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
             henabled = not history_active and turn == my_color and not gs['normal_done'] and can_afford(gs) and gs['hidden_count'] == 0
             fake_enabled = not history_active and turn == my_color and not gs['game_over'] and gs.get('fakeout_mode_enabled', False) and can_afford_fakeout(gs) and not gs['normal_done'] and not gs.get('fakeout_used', False)
 
-        draw_btn(74, 66, 'hidden', 'Ocultar', henabled, hmode, BTN_BLUE, BTN_BLUEH)
-
-        fake_active = client_state.get('draft_fakeout', False) if is_drafting else gs.get('fakeout_active', False)
-        if fake_enabled:
-            f_col, f_hov = BTN_ORANGE, BTN_ORANGEH
-        else:
-            f_col, f_hov = BTN_N, BTN_H
-        draw_btn(146, 68, 'fakeout', 'Fakeout', fake_enabled, fake_active, f_col, f_hov)
+        undo_bloqueado = gs.get('disable_undo_placeholder', False)
+        
+        if not undo_bloqueado:
+            draw_btn(74, 66, 'hidden', 'Ocultar', henabled, hmode, BTN_BLUE, BTN_BLUEH)
+    
+            fake_active = client_state.get('draft_fakeout', False) if is_drafting else gs.get('fakeout_active', False)
+            if fake_enabled:
+                f_col, f_hov = BTN_ORANGE, BTN_ORANGEH
+            else:
+                f_col, f_hov = BTN_N, BTN_H
+            draw_btn(146, 68, 'fakeout', 'Fakeout', fake_enabled, fake_active, f_col, f_hov)
 
         show_active = client_state.get('show_hidden', False)
         stxt_s = 'Esconder' if show_active else 'Sombra'
         draw_btn(220, 64, 'show', stxt_s, True, show_active, BTN_N, BTN_H)
 
-        undo_bloqueado = gs.get('disable_undo_placeholder', False)
         if client_state.get('is_test', False):
             undo_en = len(client_state.get('absolute_history', [])) > 0
         else:
@@ -1314,7 +1316,8 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         if undo_bloqueado:
             undo_en = False
             
-        draw_btn(290, 68, 'undo', 'Desfazer', undo_en, False, (120, 90, 40), (150, 110, 50))
+        if not undo_bloqueado:
+            draw_btn(290, 68, 'undo', 'Desfazer', undo_en, False, (120, 90, 40), (150, 110, 50))
     
         is_confirm = client_state.get('resign_confirm', False)
         r_txt = "Confirma?" if is_confirm else "Desistir"
@@ -1337,12 +1340,14 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
             has_real_draft = check_has_real_draft(client_state['draft_moves'])
             if not has_real_draft:
                 next_en = False
-        draw_btn(438, 44, 'next', 'Next', next_en, False, (210, 163, 44), (234, 180, 10))
-
-        end_en = not history_active and turn == my_color and (gs['normal_done'] or gs['hidden_count'] > 0 or gs.get(f'next_queue_{turn}'))
-        if client_state.get('draft_moves'):
-            end_en = check_draft_endable(client_state['draft_moves'], end_en)
-        draw_btn(488, 64, 'end', 'Finalizar', end_en, False, BTN_END, BTN_ENDH)
+        
+        if not undo_bloqueado:
+            draw_btn(438, 44, 'next', 'Next', next_en, False, (210, 163, 44), (234, 180, 10))
+    
+            end_en = not history_active and turn == my_color and (gs['normal_done'] or gs['hidden_count'] > 0 or gs.get(f'next_queue_{turn}'))
+            if client_state.get('draft_moves'):
+                end_en = check_draft_endable(client_state['draft_moves'], end_en)
+            draw_btn(488, 64, 'end', 'Finalizar', end_en, False, BTN_END, BTN_ENDH)
 
     # Replay button and log buttons removed during mid-game.
 
@@ -1636,10 +1641,6 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
             client_state['selected'] = None
             client_state['legal_sq'] = []
             client_state['is_dragging_gesture'] = False
-            if client_state.get('fakeout_triggered'):
-                await MechanicsManager.execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound, None)
-            elif client_state.get('hidden_triggered'):
-                await MechanicsManager.execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound, None)
             client_state['hidden_triggered'] = False
             client_state['fakeout_triggered'] = False
             return gs
@@ -1813,10 +1814,6 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
             trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
             client_state['is_dragging_gesture'] = False
             # ADDED: Reset triggers
-            if client_state.get('fakeout_triggered'):
-                await MechanicsManager.execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound, None)
-            elif client_state.get('hidden_triggered'):
-                await MechanicsManager.execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound, None)
             client_state['hidden_triggered'] = False
             client_state['fakeout_triggered'] = False
             
@@ -1825,12 +1822,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
     else:
         # Released outside the board -> Reset state
         client_state['is_dragging_gesture'] = False
-        client_state['hidden_triggered'] = False
         # ADDED: Reset triggers
-        if client_state.get('fakeout_triggered'):
-            await MechanicsManager.execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound, None)
-        elif client_state.get('hidden_triggered'):
-            await MechanicsManager.execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound, None)
         client_state['hidden_triggered'] = False
         client_state['fakeout_triggered'] = False
         
@@ -2002,7 +1994,13 @@ async def game_loop():
                         client_state['hidden_triggered'] = True
                         # Trigger hidden logic (async)
                         mx, my = client_state.get('drag_pos', (0,0))
-                        await MechanicsManager.execute_toggle_hidden(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None, click_pos=(mx, my), force_shockwave=True)
+                        play_sound('hidden')
+                        client_state.setdefault('shockwaves', []).append({
+                            'pos': (mx, my),
+                            'radius': 0,
+                            'alpha': 255,
+                            'type': 'hidden'
+                        })
                         
                         # UPDATE LEGAL SQUARES
                         sr, sc = client_state['drag_piece_sq']
@@ -2011,6 +2009,9 @@ async def game_loop():
                         if client_state.get('drafting'):
                             gs_temp['fakeout_active'] = client_state.get('draft_fakeout', False)
                             gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
+                        else:
+                            gs_temp['fakeout_active'] = client_state.get('fakeout_triggered', False) or gs.get('fakeout_active', False)
+                            gs_temp['hidden_mode'] = client_state.get('hidden_triggered', False) or gs.get('hidden_mode', False)
                         sel, legs = get_ui_selection(gs_temp, sr, sc, draft_moves=client_state.get('draft_moves', []))
                         if sel is not None:
                             client_state['selected'] = sel
@@ -2027,7 +2028,13 @@ async def game_loop():
                     client_state['fakeout_triggered'] = True
                     # Trigger fakeout logic (async)
                     mx, my = client_state.get('drag_pos', (0,0))
-                    await MechanicsManager.execute_toggle_fakeout(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None, click_pos=(mx, my), force_shockwave=True)
+                    play_sound('fakeout')
+                    client_state.setdefault('shockwaves', []).append({
+                        'pos': (mx, my),
+                        'radius': 0,
+                        'alpha': 255,
+                        'type': 'fakeout'
+                    })
                     
                     # UPDATE LEGAL SQUARES
                     sr, sc = client_state['drag_piece_sq']
@@ -2036,6 +2043,9 @@ async def game_loop():
                     if client_state.get('drafting'):
                         gs_temp['fakeout_active'] = client_state.get('draft_fakeout', False)
                         gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
+                    else:
+                        gs_temp['fakeout_active'] = client_state.get('fakeout_triggered', False) or gs.get('fakeout_active', False)
+                        gs_temp['hidden_mode'] = client_state.get('hidden_triggered', False) or gs.get('hidden_mode', False)
                     sel, legs = get_ui_selection(gs_temp, sr, sc, draft_moves=client_state.get('draft_moves', []))
                     if sel is not None:
                         client_state['selected'] = sel
@@ -3354,10 +3364,6 @@ async def game_loop():
                                 gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
                             sel, legs = get_ui_selection(gs_temp, r, c, draft_moves=client_state.get('draft_moves', []))
                             if sel is not None:
-                                if client_state.get('fakeout_triggered'):
-                                    await MechanicsManager.execute_toggle_fakeout(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None)
-                                elif client_state.get('hidden_triggered'):
-                                    await MechanicsManager.execute_toggle_hidden(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None)
                                 client_state['hidden_triggered'] = False
                                 client_state['fakeout_triggered'] = False
                                 

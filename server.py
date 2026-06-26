@@ -223,24 +223,28 @@ async def handler(websocket):
                     if action == 'set_fakeout_mode':
                         if color == 'w':
                             gs['fakeout_mode_enabled'] = data.get('fakeout_mode_enabled', False)
+                            gs['guest_ready'] = False
                             await broadcast_lobby(room_code)
                         continue
 
                     elif action == 'set_disable_undo':
                         if color == 'w':
                             gs['disable_undo_placeholder'] = data.get('disable_undo_placeholder', False)
+                            gs['guest_ready'] = False
                             await broadcast_lobby(room_code)
                         continue
 
                     elif action == 'set_score_to_win':
                         if color == 'w':
                             gs['score_to_win'] = data.get('score_to_win', False)
+                            gs['guest_ready'] = False
                             await broadcast_lobby(room_code)
                         continue
 
                     elif action == 'set_ice_king':
                         if color == 'w':
                             gs['ice_king_enabled'] = data.get('ice_king_enabled', False)
+                            gs['guest_ready'] = False
                             await broadcast_lobby(room_code)
                         continue
 
@@ -470,8 +474,8 @@ async def handler(websocket):
                                 if gs.get('hidden_mode') and not can_afford(gs):
                                     continue
 
-                                gesture_hidden = data.get('gesture_hidden', False) and gs.get('disable_undo_placeholder', False)
-                                gesture_fakeout = data.get('gesture_fakeout', False) and gs.get('disable_undo_placeholder', False)
+                                gesture_hidden = data.get('gesture_hidden', False)
+                                gesture_fakeout = data.get('gesture_fakeout', False)
                                 
                                 is_hidden = gs.get('hidden_mode', False) or gesture_hidden
                                 is_fakeout = gs.get('fakeout_active', False) or gesture_fakeout
