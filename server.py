@@ -471,21 +471,18 @@ async def handler(websocket):
                         if not gs.get('normal_done'):
                             legals = legal(gs, fr, fc)
                             if (tr, tc) in legals:
-                                if gs.get('hidden_mode') and not can_afford(gs):
-                                    continue
-
                                 gesture_hidden = data.get('gesture_hidden', False)
                                 gesture_fakeout = data.get('gesture_fakeout', False)
                                 
-                                if gesture_hidden:
-                                    gs['hidden_mode'] = True
-                                if gesture_fakeout:
-                                    gs['fakeout_active'] = True
-                                
-                                is_hidden = gs.get('hidden_mode', False)
-                                is_fakeout = gs.get('fakeout_active', False)
-                                
-                                old_fakeout = gs.get('fakeout_active', False)
+                                is_hidden = gs.get('hidden_mode', False) or gesture_hidden
+                                is_fakeout = gs.get('fakeout_active', False) or gesture_fakeout
+
+                                if is_hidden and not can_afford(gs):
+                                    continue
+                                if is_fakeout and not can_afford_fakeout(gs):
+                                    continue
+
+                                gs['hidden_mode'] = is_hidden
                                 gs['fakeout_active'] = is_fakeout
                                 
                                 res = exec_move(gs, fr, fc, tr, tc, hidden_move=is_hidden, promo=promo)
@@ -499,8 +496,6 @@ async def handler(websocket):
                                         'promo': promo, 'hidden': is_hidden,
                                         'fakeout': is_fakeout
                                     })
-                                else:
-                                    gs['fakeout_active'] = old_fakeout
                                 await broadcast_state(room_code)
                                 gs['ghost_capture_flash'] = None
                                 gs['ghost_capture_type'] = None
