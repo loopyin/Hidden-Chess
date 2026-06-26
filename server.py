@@ -9,12 +9,30 @@ import copy
 import traceback
 from chess_logic import make_state, exec_move, end_turn, legal, serialize_state, can_afford, alg, deactivate_plies, \
     get_next_turn_from_queue, compare_turns, pop_next_turn_from_queue, process_next_queues, ice_king_interaction
+from gesture import build_gesture_state, default_gesture_state, normalize_gesture_state, gesture_flags
 from draft_simulator import get_draft_state
 
 games = {}
 players = {}
 room_timers = {}
 active_timers = set()
+
+
+def clear_gesture_state(gs):
+    gs['gesture_state'] = default_gesture_state()
+
+
+def set_gesture_state(gs, payload=None, *, active=None, hidden=None, fakeout=None):
+    state = normalize_gesture_state(payload)
+    if active is not None:
+        state['active'] = bool(active)
+    if hidden is not None:
+        state['hidden'] = bool(hidden)
+    if fakeout is not None:
+        state['fakeout'] = bool(fakeout)
+    if not state.get('phase') or state['phase'] == "idle":
+        state['phase'] = "charging" if state.get('active') else "idle"
+    gs['gesture_state'] = state
 
 
 def generate_room_code():
@@ -253,6 +271,22 @@ async def handler(websocket):
                             gs['guest_ready'] = data.get('guest_ready', False)
                             await broadcast_lobby(room_code)
                         continue
+                    elif action == 'gesture_begin':
+                        payload = data.get('gesture_state', {})
+                        set_gesture_state(gs, payload, active=True)
+                        await broadcast_state(room_code)
+                        continue
+
+                    elif action == 'gesture_cancel':
+                        clear_gesture_state(gs)
+                        await broadcast_state(room_code)
+                        continue
+
+                    elif action == 'gesture_commit':
+                        # The commit itself is the move message; this just clears stale preview state.
+                        clear_gesture_state(gs)
+                        await broadcast_state(room_code)
+                        continue
 
                     elif action == 'start_game':
                         if color == 'w' and gs.get('opponent_joined', False) and gs.get('guest_ready', False):
@@ -328,6 +362,7 @@ async def handler(websocket):
                             restored_state['time_left'] = current_time
 
                             games[room_code] = restored_state
+                            clear_gesture_state(games[room_code])
                             await broadcast_state(room_code)
 
                     elif action == 'end_turn':
@@ -380,10 +415,13 @@ async def handler(websocket):
                             else:
                                 end_turn(gs)
                                 process_next_queues(gs)
+                        clear_gesture_state(gs)
                         
                         clean_snapshot = copy.deepcopy(gs)
                         clean_snapshot.pop('turn_start_snapshot', None)
+                        clean_snapshot['gesture_state'] = default_gesture_state()
                         games[room_code]['turn_start_snapshot'] = clean_snapshot
+                        clear_gesture_state(gs)
                         await broadcast_state(room_code)
                         gs['ghost_capture_flash'] = None
                         gs['ghost_capture_type'] = None
@@ -396,6 +434,7 @@ async def handler(websocket):
                                     gs['hidden_mode'] = not gs.get('hidden_mode', False)
                                     if gs.get('hidden_mode'):
                                         gs['fakeout_active'] = False
+                                    clear_gesture_state(gs)
                                     await broadcast_state(room_code)
 
                     elif action == 'toggle_fakeout':
@@ -404,6 +443,7 @@ async def handler(websocket):
                             gs['fakeout_active'] = not gs.get('fakeout_active', False)
                             if gs['fakeout_active']:
                                 gs['hidden_mode'] = False
+                            clear_gesture_state(gs)
                             await broadcast_state(room_code)
 
                     elif action == 'conflict_resolve':
@@ -469,9 +509,13 @@ async def handler(websocket):
                         promo = data.get('promo')
 
                         if not gs.get('normal_done'):
-                            gesture_hidden = data.get('gesture_hidden', False)
-                            gesture_fakeout = data.get('gesture_fakeout', False)
-                            
+                            gesture_payload = normalize_gesture_state(data.get('gesture_state'))
+                            gesture_hidden = bool(data.get('gesture_hidden', False) or gesture_payload.get('hidden', False))
+                            gesture_fakeout = bool(data.get('gesture_fakeout', False) or gesture_payload.get('fakeout', False))
+
+                            if not gesture_hidden and not gesture_fakeout:
+                                gesture_hidden, gesture_fakeout = gesture_flags(gs.get('gesture_state', default_gesture_state()))
+
                             old_hidden = gs.get('hidden_mode', False)
                             old_fakeout = gs.get('fakeout_active', False)
 
@@ -479,10 +523,12 @@ async def handler(websocket):
                             is_fakeout = old_fakeout or gesture_fakeout
 
                             if is_hidden and not can_afford(gs):
+                                clear_gesture_state(gs)
                                 continue
-                            
+
                             from chess_logic import can_afford_fakeout
                             if is_fakeout and not can_afford_fakeout(gs):
+                                clear_gesture_state(gs)
                                 continue
 
                             # Apply temporary gesture states for validation and execution
@@ -496,6 +542,7 @@ async def handler(websocket):
                                     if res:
                                         gs['hidden_mode'] = False
                                         gs['fakeout_active'] = False
+                                        clear_gesture_state(gs)
                                         if 'current_turn_actions' not in gs: gs['current_turn_actions'] = []
                                         gs['current_turn_actions'].append({
                                             'type': 'move',
@@ -506,12 +553,15 @@ async def handler(websocket):
                                     else:
                                         gs['hidden_mode'] = old_hidden
                                         gs['fakeout_active'] = old_fakeout
+                                        clear_gesture_state(gs)
                                 else:
                                     gs['hidden_mode'] = old_hidden
                                     gs['fakeout_active'] = old_fakeout
+                                    clear_gesture_state(gs)
                             except Exception as e:
                                 gs['hidden_mode'] = old_hidden
                                 gs['fakeout_active'] = old_fakeout
+                                clear_gesture_state(gs)
                                 raise e
 
                             await broadcast_state(room_code)

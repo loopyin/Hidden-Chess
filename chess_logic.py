@@ -1,4 +1,5 @@
 import time
+from gesture import default_gesture_state, normalize_gesture_state
 
 GLYPHS = {
     'wK': '♚', 'wQ': '♛', 'wR': '♜', 'wB': '♝', 'wN': '♞', 'wP': '♟',
@@ -367,7 +368,8 @@ def make_state():
         next_queue_w=[],
         next_queue_b=[],
         moved_this_turn=set(),
-        frozen_pieces=set()
+        frozen_pieces=set(),
+        gesture_state=default_gesture_state()
     )
 
 
@@ -1358,6 +1360,7 @@ def serialize_state(gs, player_color=None, dgs=None):
         'reveal_flashes': gs.get('reveal_flashes', []),
         'fakeout_active': gs.get('fakeout_active', False),
         'fakeout_used': gs.get('fakeout_used', False),
+        'gesture_state': normalize_gesture_state(gs.get('gesture_state', default_gesture_state())),
         'fakeout_mode_enabled': gs.get('fakeout_mode_enabled', True),
         'score_to_win': gs.get('score_to_win', False),
         'disable_undo_placeholder': gs.get('disable_undo_placeholder', False),
@@ -1442,6 +1445,7 @@ def deserialize_state(data):
         'reveal_flashes': data.get('reveal_flashes', []),
         'fakeout_active': data.get('fakeout_active', False),
         'fakeout_used': data.get('fakeout_used', False),
+        'gesture_state': normalize_gesture_state(data.get('gesture_state', default_gesture_state())),
         'fakeout_mode_enabled': data.get('fakeout_mode_enabled', True),
         'score_to_win': data.get('score_to_win', False),
         'disable_undo_placeholder': data.get('disable_undo_placeholder', False),

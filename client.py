@@ -12,6 +12,7 @@ from mechanics import MechanicsManager
 from draft_simulator import get_draft_state
 from renderer import BoardRenderer
 from chess_logic import fakeout_cost
+from gesture import build_gesture_state, default_gesture_state, normalize_gesture_state, gesture_phase
 
 SESSION_FILE = "session_token.json"
 
@@ -217,6 +218,36 @@ def play_sound(snd_name):
         try:
             SOUNDS[snd_name].play()
         except:
+            pass
+
+async def sync_gesture_begin(websocket, client_state, *, timer=0.0, source_sq=None, source_piece=None):
+    gesture_state = build_gesture_state(
+        timer,
+        hidden=client_state.get('hidden_triggered', False),
+        fakeout=client_state.get('fakeout_triggered', False),
+        active=True,
+        source_sq=source_sq,
+        source_piece=source_piece,
+    )
+    client_state['gesture_state'] = gesture_state
+    if websocket and not client_state.get('is_local', False):
+        try:
+            await websocket.send(json.dumps({
+                'type': 'action',
+                'action': 'gesture_begin',
+                'gesture_state': gesture_state,
+            }))
+        except Exception:
+            pass
+    return gesture_state
+
+
+async def sync_gesture_cancel(websocket, client_state):
+    client_state['gesture_state'] = default_gesture_state()
+    if websocket and not client_state.get('is_local', False):
+        try:
+            await websocket.send(json.dumps({'type': 'action', 'action': 'gesture_cancel'}))
+        except Exception:
             pass
 
 
@@ -1643,6 +1674,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
             client_state['is_dragging_gesture'] = False
             client_state['hidden_triggered'] = False
             client_state['fakeout_triggered'] = False
+            await sync_gesture_cancel(websocket, client_state)
             return gs
         
         # --- ICE KING CHECK ---
@@ -1672,6 +1704,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                     client_state['legal_sq'] = []
                     client_state['hidden_triggered'] = False
                     client_state['fakeout_triggered'] = False
+                    await sync_gesture_cancel(websocket, client_state)
                     return gs
         # --- END ICE KING CHECK ---
 
@@ -1795,6 +1828,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                     client_state['selected'] = None
                     client_state['legal_sq'] = []
                     gs['hidden_mode'] = False
+                    client_state['gesture_state'] = default_gesture_state()
                 else:
                     move_cmd = {
                         "type": "action", "action": "move",
@@ -1805,26 +1839,30 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                     await websocket.send(json.dumps(move_cmd))
                     client_state['selected'] = None
                     client_state['legal_sq'] = []
+                    client_state['gesture_state'] = default_gesture_state()
             
             client_state['is_dragging_gesture'] = False
             client_state['hidden_triggered'] = False
             client_state['fakeout_triggered'] = False
+            client_state['gesture_state'] = default_gesture_state()
         else:
             # Release on an invalid square -> Red pulse
             trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
             client_state['is_dragging_gesture'] = False
-            # ADDED: Reset triggers
             client_state['hidden_triggered'] = False
             client_state['fakeout_triggered'] = False
+            client_state['gesture_state'] = default_gesture_state()
+            await sync_gesture_cancel(websocket, client_state)
             
             client_state['selected'] = None
             client_state['legal_sq'] = []
     else:
         # Released outside the board -> Reset state
         client_state['is_dragging_gesture'] = False
-        # ADDED: Reset triggers
         client_state['hidden_triggered'] = False
         client_state['fakeout_triggered'] = False
+        client_state['gesture_state'] = default_gesture_state()
+        await sync_gesture_cancel(websocket, client_state)
         
         client_state['selected'] = None
         client_state['legal_sq'] = []
@@ -1937,7 +1975,8 @@ async def game_loop():
         'turn_start_snapshot': None,
         'turn_history': [],
         'history_index': 0,
-        'score_to_win': False
+        'score_to_win': False,
+        'gesture_state': default_gesture_state()
     }
     input_text = ""
     websocket = None
@@ -1962,6 +2001,7 @@ async def game_loop():
             'legal_sq': [],
             'room_code': "TEST" if is_test else "LOCAL",
             'is_typing': False,
+            'gesture_state': default_gesture_state(),
             'msg_queue': deque(),
             'show_hidden': True,
             'resign_confirm': False,
@@ -1988,43 +2028,39 @@ async def game_loop():
         
         if client_state.get('is_dragging_gesture'):
             client_state['gesture_timer'] = client_state.get('gesture_timer', 0.0) + dt
-            if not client_state.get('hidden_triggered'):
-                 if client_state['gesture_timer'] >= 2.0:
-                    if MechanicsManager.can_toggle_hidden(gs, client_state):
-                        client_state['hidden_triggered'] = True
-                        # Trigger hidden logic (async)
-                        mx, my = client_state.get('drag_pos', (0,0))
-                        await MechanicsManager.execute_toggle_hidden(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None, click_pos=(mx, my), force_shockwave=True, skip_ws=True)
-                        
-                        # UPDATE LEGAL SQUARES
-                        sr, sc = client_state['drag_piece_sq']
-                        gs_temp = copy.copy(gs)
-                        gs_temp['drafting_active'] = client_state.get('drafting', False)
-                        if client_state.get('drafting'):
-                            gs_temp['fakeout_active'] = client_state.get('draft_fakeout', False)
-                            gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
-                        else:
-                            gs_temp['fakeout_active'] = client_state.get('fakeout_triggered', False) or gs.get('fakeout_active', False)
-                            gs_temp['hidden_mode'] = client_state.get('hidden_triggered', False) or gs.get('hidden_mode', False)
-                        sel, legs = get_ui_selection(gs_temp, sr, sc, draft_moves=client_state.get('draft_moves', []))
-                        if sel is not None:
-                            client_state['selected'] = sel
-                            client_state['legal_sq'] = legs
-                        else:
-                            client_state['legal_sq'] = []
+            if not client_state.get('hidden_triggered') and client_state['gesture_timer'] >= 2.0:
+                if MechanicsManager.can_toggle_hidden(gs, client_state):
+                    client_state['hidden_triggered'] = True
+                    mx, my = client_state.get('drag_pos', (0,0))
+                    await MechanicsManager.execute_toggle_hidden(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None, click_pos=(mx, my), force_shockwave=True, skip_ws=True)
+                    await sync_gesture_begin(websocket, client_state, timer=client_state['gesture_timer'], source_sq=client_state.get('drag_piece_sq'), source_piece=client_state.get('drag_piece_name'))
+
+                    sr, sc = client_state['drag_piece_sq']
+                    gs_temp = copy.copy(gs)
+                    gs_temp['drafting_active'] = client_state.get('drafting', False)
+                    if client_state.get('drafting'):
+                        gs_temp['fakeout_active'] = client_state.get('draft_fakeout', False)
+                        gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
                     else:
-                        # Cannot afford or toggle hidden, let timer continue if we can afford fakeout
-                        if not MechanicsManager.can_toggle_fakeout(gs, client_state):
-                            client_state['gesture_timer'] = 2.0
+                        gs_temp['fakeout_active'] = client_state.get('fakeout_triggered', False) or gs.get('fakeout_active', False)
+                        gs_temp['hidden_mode'] = client_state.get('hidden_triggered', False) or gs.get('hidden_mode', False)
+                    sel, legs = get_ui_selection(gs_temp, sr, sc, draft_moves=client_state.get('draft_moves', []))
+                    if sel is not None:
+                        client_state['selected'] = sel
+                        client_state['legal_sq'] = legs
+                    else:
+                        client_state['legal_sq'] = []
+                else:
+                    if not MechanicsManager.can_toggle_fakeout(gs, client_state):
+                        client_state['gesture_timer'] = 2.0
 
             if client_state['gesture_timer'] >= 6.0 and not client_state.get('fakeout_triggered'):
                 if MechanicsManager.can_toggle_fakeout(gs, client_state):
                     client_state['fakeout_triggered'] = True
-                    # Trigger fakeout logic (async)
                     mx, my = client_state.get('drag_pos', (0,0))
                     await MechanicsManager.execute_toggle_fakeout(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None, click_pos=(mx, my), force_shockwave=True, skip_ws=True)
-                    
-                    # UPDATE LEGAL SQUARES
+                    await sync_gesture_begin(websocket, client_state, timer=client_state['gesture_timer'], source_sq=client_state.get('drag_piece_sq'), source_piece=client_state.get('drag_piece_name'))
+
                     sr, sc = client_state['drag_piece_sq']
                     gs_temp = copy.copy(gs)
                     gs_temp['drafting_active'] = client_state.get('drafting', False)
