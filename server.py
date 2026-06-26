@@ -510,6 +510,7 @@ async def handler(websocket):
 
                         if not gs.get('normal_done'):
                             gesture_payload = normalize_gesture_state(data.get('gesture_state'))
+                            gs['gesture_state'] = gesture_payload
                             gesture_hidden = bool(data.get('gesture_hidden', False) or gesture_payload.get('hidden', False))
                             gesture_fakeout = bool(data.get('gesture_fakeout', False) or gesture_payload.get('fakeout', False))
 

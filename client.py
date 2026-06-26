@@ -1834,7 +1834,8 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                         "type": "action", "action": "move",
                         "fr": sr, "fc": sc, "tr": r, "tc": c, "promo": promo, 
                         "gesture_hidden": is_hidden_move,
-                        "gesture_fakeout": is_fakeout_move
+                        "gesture_fakeout": is_fakeout_move,
+                        "gesture_state": client_state.get('gesture_state', default_gesture_state())
                     }
                     await websocket.send(json.dumps(move_cmd))
                     client_state['selected'] = None
@@ -2237,6 +2238,8 @@ async def game_loop():
                 elif data['type'] == 'state_update':
                     client_state['waiting'] = False
                     new_gs = deserialize_state(data['state'])
+                    if not client_state.get('is_dragging_gesture'):
+                        client_state['gesture_state'] = new_gs.get('gesture_state', default_gesture_state())
                     
                     if new_gs.get('game_over') and not gs.get('game_over'):
                         play_sound('game_over')
@@ -3616,7 +3619,8 @@ async def game_loop():
                                                 "type": "action", "action": "move",
                                                 "fr": sr, "fc": sc, "tr": r, "tc": c, "promo": promo,
                                                 "gesture_hidden": is_hidden_cmd,
-                                                "gesture_fakeout": is_fakeout_cmd
+                                                "gesture_fakeout": is_fakeout_cmd,
+                                                "gesture_state": client_state.get('gesture_state', default_gesture_state())
                                             }
                                             await websocket.send(json.dumps(move_cmd))
                                             client_state['selected'] = None
