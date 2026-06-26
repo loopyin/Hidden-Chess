@@ -469,37 +469,55 @@ async def handler(websocket):
                         promo = data.get('promo')
 
                         if not gs.get('normal_done'):
-                            legals = legal(gs, fr, fc)
-                            if (tr, tc) in legals:
-                                gesture_hidden = data.get('gesture_hidden', False)
-                                gesture_fakeout = data.get('gesture_fakeout', False)
-                                
-                                is_hidden = gs.get('hidden_mode', False) or gesture_hidden
-                                is_fakeout = gs.get('fakeout_active', False) or gesture_fakeout
+                            gesture_hidden = data.get('gesture_hidden', False)
+                            gesture_fakeout = data.get('gesture_fakeout', False)
+                            
+                            old_hidden = gs.get('hidden_mode', False)
+                            old_fakeout = gs.get('fakeout_active', False)
 
-                                if is_hidden and not can_afford(gs):
-                                    continue
-                                if is_fakeout and not can_afford_fakeout(gs):
-                                    continue
+                            is_hidden = old_hidden or gesture_hidden
+                            is_fakeout = old_fakeout or gesture_fakeout
 
-                                gs['hidden_mode'] = is_hidden
-                                gs['fakeout_active'] = is_fakeout
-                                
-                                res = exec_move(gs, fr, fc, tr, tc, hidden_move=is_hidden, promo=promo)
-                                if res:
-                                    gs['hidden_mode'] = False
-                                    gs['fakeout_active'] = False
-                                    if 'current_turn_actions' not in gs: gs['current_turn_actions'] = []
-                                    gs['current_turn_actions'].append({
-                                        'type': 'move',
-                                        'fr': fr, 'fc': fc, 'tr': tr, 'tc': tc,
-                                        'promo': promo, 'hidden': is_hidden,
-                                        'fakeout': is_fakeout
-                                    })
-                                await broadcast_state(room_code)
-                                gs['ghost_capture_flash'] = None
-                                gs['ghost_capture_type'] = None
-                                gs['reveal_flashes'] = []
+                            if is_hidden and not can_afford(gs):
+                                continue
+                            
+                            from chess_logic import can_afford_fakeout
+                            if is_fakeout and not can_afford_fakeout(gs):
+                                continue
+
+                            # Apply temporary gesture states for validation and execution
+                            gs['hidden_mode'] = is_hidden
+                            gs['fakeout_active'] = is_fakeout
+
+                            try:
+                                legals = legal(gs, fr, fc)
+                                if (tr, tc) in legals:
+                                    res = exec_move(gs, fr, fc, tr, tc, hidden_move=is_hidden, promo=promo)
+                                    if res:
+                                        gs['hidden_mode'] = False
+                                        gs['fakeout_active'] = False
+                                        if 'current_turn_actions' not in gs: gs['current_turn_actions'] = []
+                                        gs['current_turn_actions'].append({
+                                            'type': 'move',
+                                            'fr': fr, 'fc': fc, 'tr': tr, 'tc': tc,
+                                            'promo': promo, 'hidden': is_hidden,
+                                            'fakeout': is_fakeout
+                                        })
+                                    else:
+                                        gs['hidden_mode'] = old_hidden
+                                        gs['fakeout_active'] = old_fakeout
+                                else:
+                                    gs['hidden_mode'] = old_hidden
+                                    gs['fakeout_active'] = old_fakeout
+                            except Exception as e:
+                                gs['hidden_mode'] = old_hidden
+                                gs['fakeout_active'] = old_fakeout
+                                raise e
+
+                            await broadcast_state(room_code)
+                            gs['ghost_capture_flash'] = None
+                            gs['ghost_capture_type'] = None
+                            gs['reveal_flashes'] = []
 
                     elif action == 'ice_king' and gs.get('ice_king_enabled', False) and gs.get('disable_undo_placeholder', False):
                         kr, kc = data['kr'], data['kc']
