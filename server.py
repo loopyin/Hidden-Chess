@@ -95,6 +95,44 @@ async def broadcast_lobby(room_code):
     except Exception as e:
         print(f"Broadcast lobby error: {e}")
 
+async def broadcast_gesture(room_code):
+    try:
+        state = games.get(room_code)
+        if not state:
+            return
+        
+        gesture_payload = json.dumps({
+            "type": "gesture_update",
+            "gesture_state": state.get('gesture_state', default_gesture_state())
+        })
+        for ws, info in list(players.items()):
+            if info[0] == room_code:
+                try:
+                    await ws.send(gesture_payload)
+                except websockets.exceptions.ConnectionClosed:
+                    pass
+    except Exception as e:
+        print(f"Broadcast gesture error: {e}")
+
+async def broadcast_state_delta(room_code, delta):
+    try:
+        state = games.get(room_code)
+        if not state:
+            return
+        
+        payload = json.dumps({
+            "type": "state_delta",
+            **delta
+        })
+        for ws, info in list(players.items()):
+            if info[0] == room_code:
+                try:
+                    await ws.send(payload)
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"Broadcast delta error: {e}")
+
 async def broadcast_state(room_code):
     from debug_utils import check_invariants, log_minimal_snapshot
     try:
@@ -272,6 +310,22 @@ async def handler(websocket):
                             await broadcast_lobby(room_code)
                         continue
 
+                    elif action == 'gesture_begin':
+                        payload = data.get('gesture_state', {})
+                        set_gesture_state(gs, payload, active=True)
+                        await broadcast_gesture(room_code)
+                        continue
+
+                    elif action == 'gesture_cancel':
+                        clear_gesture_state(gs)
+                        await broadcast_gesture(room_code)
+                        continue
+
+                    elif action == 'gesture_commit':
+                        clear_gesture_state(gs)
+                        await broadcast_gesture(room_code)
+                        continue
+
                     elif action == 'start_game':
                         if color == 'w' and gs.get('opponent_joined', False) and gs.get('guest_ready', False):
                             gs['game_started'] = True
@@ -419,7 +473,10 @@ async def handler(websocket):
                                     if gs.get('hidden_mode'):
                                         gs['fakeout_active'] = False
                                     clear_gesture_state(gs)
-                                    await broadcast_state(room_code)
+                                    await broadcast_state_delta(room_code, {
+                                        'hidden_mode': gs['hidden_mode'],
+                                        'fakeout_active': gs.get('fakeout_active', False)
+                                    })
 
                     elif action == 'toggle_fakeout':
                         from chess_logic import can_afford_fakeout
@@ -428,7 +485,10 @@ async def handler(websocket):
                             if gs['fakeout_active']:
                                 gs['hidden_mode'] = False
                             clear_gesture_state(gs)
-                            await broadcast_state(room_code)
+                            await broadcast_state_delta(room_code, {
+                                'fakeout_active': gs['fakeout_active'],
+                                'hidden_mode': gs.get('hidden_mode', False)
+                            })
 
                     elif action == 'conflict_resolve':
                         kind, cr2, cc3 = data['conflict']
@@ -519,6 +579,7 @@ async def handler(websocket):
                                 legals = legal(gs, fr, fc)
                                 if (tr, tc) in legals:
                                     res = exec_move(gs, fr, fc, tr, tc, hidden_move=is_hidden, promo=promo)
+                                    clear_gesture_state(gs)
                                     if res:
                                         gs['hidden_mode'] = False
                                         gs['fakeout_active'] = False
@@ -533,9 +594,11 @@ async def handler(websocket):
                                         gs['hidden_mode'] = old_hidden
                                         gs['fakeout_active'] = old_fakeout
                                 else:
+                                    clear_gesture_state(gs)
                                     gs['hidden_mode'] = old_hidden
                                     gs['fakeout_active'] = old_fakeout
                             except Exception as e:
+                                clear_gesture_state(gs)
                                 gs['hidden_mode'] = old_hidden
                                 gs['fakeout_active'] = old_fakeout
                                 raise e

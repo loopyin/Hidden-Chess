@@ -220,6 +220,13 @@ def play_sound(snd_name):
         except:
             pass
 
+def send_ws_msg(client_state, websocket, msg_dict):
+    if not websocket or client_state.get('is_local', False):
+        return
+    if 'out_msg_queue' not in client_state:
+        client_state['out_msg_queue'] = deque()
+    client_state['out_msg_queue'].append(json.dumps(msg_dict))
+
 async def sync_gesture_begin(websocket, client_state, *, timer=0.0, source_sq=None, source_piece=None):
     gesture_state = build_gesture_state(
         timer,
@@ -229,12 +236,38 @@ async def sync_gesture_begin(websocket, client_state, *, timer=0.0, source_sq=No
         source_sq=source_sq,
         source_piece=source_piece,
     )
+    
+    if client_state.get('last_sent_gesture') == gesture_state:
+        return gesture_state
+
     client_state['gesture_state'] = gesture_state
+    client_state['last_sent_gesture'] = gesture_state
+
+    if websocket and not client_state.get('is_local', False):
+        try:
+            send_ws_msg(client_state, websocket, {
+                'type': 'action',
+                'action': 'gesture_begin',
+                'gesture_state': gesture_state,
+            })
+        except Exception:
+            pass
     return gesture_state
 
 
 async def sync_gesture_cancel(websocket, client_state):
-    client_state['gesture_state'] = default_gesture_state()
+    g_state = default_gesture_state()
+    if client_state.get('last_sent_gesture') == g_state:
+        return
+        
+    client_state['gesture_state'] = g_state
+    client_state['last_sent_gesture'] = g_state
+    
+    if websocket and not client_state.get('is_local', False):
+        try:
+            send_ws_msg(client_state, websocket, {'type': 'action', 'action': 'gesture_cancel'})
+        except Exception:
+            pass
 
 
 def draw_rect_aa(surf, color, rect, radius=5, border=0):
@@ -536,13 +569,6 @@ async def ask_promo(screen, fonts, player_col, websocket, client_state):
     pygame.display.flip()
 
     while True:
-        if websocket is not None:
-            try:
-                msg = await asyncio.wait_for(websocket.recv(), timeout=0.01)
-                client_state['msg_queue'].append(msg)
-            except asyncio.TimeoutError:
-                pass
-
         for ev in pygame.event.get():
             if ev.type == pygame.MOUSEBUTTONDOWN:
                 for rect, o in boxes:
@@ -1270,6 +1296,9 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         draw_fancy_btn(screen, text, fonts['ui'], base_color, hover_color, BTN_TXT, rect, is_hover=is_hover, is_disabled=not is_enabled, border_color=b_color, custom_radius=6)
         btns[key] = rect
 
+    # Debug Button
+    draw_btn(BOARD_PX - 80, 70, 'debug', 'Depurar', True, False, (140, 50, 50), (180, 70, 70), y_override=BOARD_PX + 12)
+
     if client_state.get('is_replay'):
         draw_btn(12, 180, 'exit_replay', 'Voltar ao Menu', True, False, (140, 50, 50), (180, 70, 70))
         draw_btn(200, 60, 'flip', 'Girar', True, False, BTN_N, BTN_H)
@@ -1872,6 +1901,33 @@ async def wake_up_server(uri):
     except Exception:
         pass
 
+async def ws_receiver_task(websocket, client_state):
+    try:
+        async for msg in websocket:
+            client_state['msg_queue'].append(msg)
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        print(f"WS Receiver exception: {e}")
+
+async def ws_sender_task(websocket, client_state):
+    try:
+        while True:
+            if client_state.get('out_msg_queue'):
+                msg = client_state['out_msg_queue'].popleft()
+                try:
+                    await websocket.send(msg)
+                except Exception as e:
+                    print(f"WS Send exception: {e}")
+                    # If socket is closed, we'll break or let it fail
+                    break
+            else:
+                await asyncio.sleep(0.016) # wait ~1 frame
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        print(f"WS Sender exception: {e}")
+
 async def connect_and_join(uri, action, room_code=None, token=None):
     ssl_ctx = ssl.create_default_context()
     ssl_ctx.check_hostname = False
@@ -2183,53 +2239,72 @@ async def game_loop():
                 else:
                     websocket, initial_msg = res
                     client_state['msg_queue'].append(initial_msg)
+                    client_state['ws_task'] = asyncio.create_task(ws_receiver_task(websocket, client_state))
 
         # A. Websocket message parsing (multiplayer only)
         if websocket is not None and not client_state.get('is_local', False):
+            if client_state.get('ws_task') and client_state['ws_task'].done():
+                error_msg = "Conexão perdida. Retornando ao menu..."
+                app_state = "MENU"
+                websocket = None
+                client_state['ws_task'] = None
+                continue
+
             try:
-                if client_state['msg_queue']:
+                while client_state['msg_queue']:
                     msg = client_state['msg_queue'].popleft()
-                else:
-                    msg = await asyncio.wait_for(websocket.recv(), timeout=0.005)
+                    data = json.loads(msg)
 
-                data = json.loads(msg)
-
-                if data['type'] == 'room_created':
-                    client_state['room_code'] = data['room']
-                    client_state['my_color'] = data['color']
-                    app_state = "LOBBY"
-                    save_session(data['room'], data.get('session_token'))
-
-                elif data['type'] == 'room_joined':
-                    client_state['room_code'] = data['room']
-                    client_state['my_color'] = data['color']
-                    client_state['flipped'] = (data['color'] == 'b')
-                    save_session(data['room'], data.get('session_token'))
-                    if data.get('reconnected'):
-                        app_state = "PLAYING"
-                        client_state['waiting'] = True # Will be cleared by state_update
-                    else:
+                    if data['type'] == 'room_created':
+                        client_state['room_code'] = data['room']
+                        client_state['my_color'] = data['color']
                         app_state = "LOBBY"
+                        save_session(data['room'], data.get('session_token'))
 
-                elif data['type'] == 'lobby_update':
-                    lobby_state = data['state']
-                    gs['opponent_joined'] = lobby_state.get('opponent_joined', False)
-                    gs['guest_ready'] = lobby_state.get('guest_ready', False)
-                    gs['fakeout_mode_enabled'] = lobby_state.get('fakeout_mode_enabled', False)
-                    gs['disable_undo_placeholder'] = lobby_state.get('disable_undo_placeholder', False)
-                    gs['score_to_win'] = lobby_state.get('score_to_win', False)
-                    gs['ice_king_enabled'] = lobby_state.get('ice_king_enabled', False)
-                    
-                    client_state['fakeout_mode_enabled'] = gs['fakeout_mode_enabled']
-                    client_state['disable_undo_placeholder'] = gs['disable_undo_placeholder']
-                    client_state['score_to_win'] = gs['score_to_win']
-                    client_state['ice_king_enabled'] = gs['ice_king_enabled']
+                    elif data['type'] == 'room_joined':
+                        client_state['room_code'] = data['room']
+                        client_state['my_color'] = data['color']
+                        client_state['flipped'] = (data['color'] == 'b')
+                        save_session(data['room'], data.get('session_token'))
+                        if data.get('reconnected'):
+                            app_state = "PLAYING"
+                            client_state['waiting'] = True # Will be cleared by state_update
+                        else:
+                            app_state = "LOBBY"
 
-                elif data['type'] == 'state_update':
-                    client_state['waiting'] = False
-                    new_gs = deserialize_state(data['state'])
-                    if not client_state.get('is_dragging_gesture'):
-                        client_state['gesture_state'] = new_gs.get('gesture_state', default_gesture_state())
+                    elif data['type'] == 'lobby_update':
+                        lobby_state = data['state']
+                        gs['opponent_joined'] = lobby_state.get('opponent_joined', False)
+                        gs['guest_ready'] = lobby_state.get('guest_ready', False)
+                        gs['fakeout_mode_enabled'] = lobby_state.get('fakeout_mode_enabled', False)
+                        gs['disable_undo_placeholder'] = lobby_state.get('disable_undo_placeholder', False)
+                        gs['score_to_win'] = lobby_state.get('score_to_win', False)
+                        gs['ice_king_enabled'] = lobby_state.get('ice_king_enabled', False)
+                        
+                        client_state['fakeout_mode_enabled'] = gs['fakeout_mode_enabled']
+                        client_state['disable_undo_placeholder'] = gs['disable_undo_placeholder']
+                        client_state['score_to_win'] = gs['score_to_win']
+                        client_state['ice_king_enabled'] = gs['ice_king_enabled']
+
+                    elif data['type'] == 'gesture_update':
+                        new_gstate = data.get('gesture_state', default_gesture_state())
+                        gs['gesture_state'] = new_gstate
+                        if not client_state.get('is_dragging_gesture'):
+                            client_state['gesture_state'] = new_gstate
+                        continue
+
+                    elif data['type'] == 'state_delta':
+                        if 'hidden_mode' in data:
+                            gs['hidden_mode'] = data['hidden_mode']
+                        if 'fakeout_active' in data:
+                            gs['fakeout_active'] = data['fakeout_active']
+                        continue
+
+                    elif data['type'] == 'state_update':
+                        client_state['waiting'] = False
+                        new_gs = deserialize_state(data['state'])
+                        if not client_state.get('is_dragging_gesture'):
+                            client_state['gesture_state'] = new_gs.get('gesture_state', default_gesture_state())
                     
                     if new_gs.get('game_over') and not gs.get('game_over'):
                         play_sound('game_over')
@@ -2387,16 +2462,10 @@ async def game_loop():
                     if websocket:
                         await websocket.close()
                         websocket = None
+                        client_state['ws_task'] = None
 
-            except asyncio.TimeoutError:
-                pass
-            except websockets.exceptions.ConnectionClosed:
-                error_msg = "Conexão perdida. Retornando ao menu..."
-                app_state = "MENU"
-                websocket = None
             except Exception as e:
-                print("Websocket error:", e)
-
+                print("Message processing error:", e)
 
         # C. Handle local and remote pygame events
         for ev in pygame.event.get():
@@ -3095,6 +3164,31 @@ async def game_loop():
                                 client_state['undo_holding'] = True
                                 client_state['undo_hold_timer'] = 0.0
                                 gs = await perform_undo_action(client_state, gs, is_local, websocket)
+                            continue
+
+                        if btns.get('debug') and btns['debug'].collidepoint((mx, my)):
+                            try:
+                                def debug_encoder(obj):
+                                    if hasattr(obj, '__dict__'):
+                                        return obj.__dict__
+                                    elif isinstance(obj, set):
+                                        return list(obj)
+                                    elif isinstance(obj, tuple):
+                                        return list(obj)
+                                    return str(obj)
+                                
+                                dump_data = {
+                                    'client_state': {k:v for k,v in client_state.items() if k not in ['ws_task', 'msg_queue', 'out_msg_queue', '_serialize_cache', 'panel_btns', 'conn_task', 'gesture_state', 'my_font']},
+                                    'gs': gs
+                                }
+                                filename = f"debug_log_{int(time.time())}.json"
+                                with open(filename, "w", encoding="utf-8") as f_out:
+                                    json.dump(dump_data, f_out, indent=4, ensure_ascii=False, default=debug_encoder)
+                                client_state['export_success_msg'] = f"Debug salvo em {filename}"
+                                if 'log' in gs:
+                                    gs['log'].append(f"Debug salvo em {filename}")
+                            except Exception as e:
+                                client_state['export_success_msg'] = f"Erro no debug dump: {str(e)}"
                             continue
 
                         if btns.get('flip') and btns['flip'].collidepoint((mx, my)):

@@ -158,7 +158,8 @@ class MechanicsManager:
             return
 
         if not skip_ws and not is_local and websocket:
-            await websocket.send(json.dumps({"type": "action", "action": "toggle_hidden"}))
+            from client import send_ws_msg
+            send_ws_msg(client_state, websocket, {"type": "action", "action": "toggle_hidden"})
 
     @staticmethod
     def _execute_toggle_fakeout_sync(gs, client_state, is_local, play_sound_fn, save_undo_fn, click_pos=None, force_shockwave=False):
@@ -214,4 +215,5 @@ class MechanicsManager:
             return
 
         if not skip_ws and not is_local and websocket:
-            await websocket.send(json.dumps({"type": "action", "action": "toggle_fakeout"}))
+            from client import send_ws_msg
+            send_ws_msg(client_state, websocket, {"type": "action", "action": "toggle_fakeout"})
