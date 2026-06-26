@@ -153,11 +153,11 @@ class MechanicsManager:
         return True
 
     @staticmethod
-    async def execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound_fn, save_undo_fn, click_pos=None, force_shockwave=False):
+    async def execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound_fn, save_undo_fn, click_pos=None, force_shockwave=False, skip_ws=False):
         if not MechanicsManager._execute_toggle_hidden_sync(gs, client_state, is_local, play_sound_fn, save_undo_fn, click_pos, force_shockwave):
             return
 
-        if not is_local and websocket:
+        if not skip_ws and not is_local and websocket:
             await websocket.send(json.dumps({"type": "action", "action": "toggle_hidden"}))
 
     @staticmethod
@@ -209,9 +209,9 @@ class MechanicsManager:
         return True
 
     @staticmethod
-    async def execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound_fn, save_undo_fn, click_pos=None, force_shockwave=False):
+    async def execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound_fn, save_undo_fn, click_pos=None, force_shockwave=False, skip_ws=False):
         if not MechanicsManager._execute_toggle_fakeout_sync(gs, client_state, is_local, play_sound_fn, save_undo_fn, click_pos, force_shockwave):
             return
 
-        if not is_local and websocket:
+        if not skip_ws and not is_local and websocket:
             await websocket.send(json.dumps({"type": "action", "action": "toggle_fakeout"}))

@@ -1994,13 +1994,7 @@ async def game_loop():
                         client_state['hidden_triggered'] = True
                         # Trigger hidden logic (async)
                         mx, my = client_state.get('drag_pos', (0,0))
-                        play_sound('hidden')
-                        client_state.setdefault('shockwaves', []).append({
-                            'pos': (mx, my),
-                            'radius': 0,
-                            'alpha': 255,
-                            'type': 'hidden'
-                        })
+                        await MechanicsManager.execute_toggle_hidden(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None, click_pos=(mx, my), force_shockwave=True, skip_ws=True)
                         
                         # UPDATE LEGAL SQUARES
                         sr, sc = client_state['drag_piece_sq']
@@ -2028,13 +2022,7 @@ async def game_loop():
                     client_state['fakeout_triggered'] = True
                     # Trigger fakeout logic (async)
                     mx, my = client_state.get('drag_pos', (0,0))
-                    play_sound('fakeout')
-                    client_state.setdefault('shockwaves', []).append({
-                        'pos': (mx, my),
-                        'radius': 0,
-                        'alpha': 255,
-                        'type': 'fakeout'
-                    })
+                    await MechanicsManager.execute_toggle_fakeout(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None, click_pos=(mx, my), force_shockwave=True, skip_ws=True)
                     
                     # UPDATE LEGAL SQUARES
                     sr, sc = client_state['drag_piece_sq']
