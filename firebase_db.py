@@ -127,7 +127,8 @@ class FirebaseClient:
                 }
                 
                 data_encoded = json.dumps(doc).encode('utf-8')
-                patch_req = urllib.request.Request(url, data=data_encoded, headers={'Content-Type': 'application/json'}, method='PATCH')
+                patch_url = f"{BASE_URL}/{room_code}?updateMask.fieldPaths=state&updateMask.fieldPaths=tokens&key={API_KEY}"
+                patch_req = urllib.request.Request(patch_url, data=data_encoded, headers={'Content-Type': 'application/json'}, method='PATCH')
                 try:
                     with urllib.request.urlopen(patch_req, timeout=10) as patch_resp:
                         if patch_resp.status == 200:
