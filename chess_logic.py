@@ -825,24 +825,6 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         gs['moved_this_turn'].add((tr, tc))
         gs['normal_done'] = True
     return True
-                enemy_path = val.path
-                is_f = val.is_fakeout
-                enemy_hidden[t_pos] = PieceMetaModifier(pub_pos=None, piece=hp, path=enemy_path, is_fakeout=is_f, fakeout_path=[], plies=[])
-
-        gs['captured_w'].discard((tr, tc))
-        gs['captured_b'].discard((tr, tc))
-
-        # ep and castling rights updates
-        gs['ep'] = None
-        if pt(p) == 'P' and abs(tr - cfr) == 2: gs['ep'] = ((cfr + tr) // 2, cfc)
-        if pt(p) == 'K':
-            gs['cr'][c + 'K'] = False
-            gs['cr'][c + 'Q'] = False
-        if pt(p) == 'R':
-            if cfr == (7 if c == 'w' else 0) and cfc == 0: gs['cr'][c + 'Q'] = False
-            if cfr == (7 if c == 'w' else 0) and cfc == 7: gs['cr'][c + 'K'] = False
-        gs['normal_done'] = False
-        return True
 
     elif hidden_move:
         if (fr, fc) in gs.get('moved_this_turn', set()):
