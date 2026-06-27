@@ -1948,11 +1948,6 @@ async def game_loop():
     def start_local_game(is_test=False):
         nonlocal gs, client_state, app_state
         gs = make_state()
-        gs['game_started'] = True
-        gs['fakeout_mode_enabled'] = True
-        gs['disable_undo_placeholder'] = True
-        gs['score_to_win'] = True
-        gs['ice_king_enabled'] = True
         client_state = {
             'my_color': 'w',
             'waiting': False,
@@ -1966,18 +1961,10 @@ async def game_loop():
             'resign_confirm': False,
             'panel_btns': {},
             'is_local': True,
-            'is_test': is_test,
-            'turn_start_snapshot': copy.deepcopy(gs),
-            'turn_history': [copy.deepcopy(gs)],
-            'history_index': 0,
-            'fakeout_mode_enabled': True,
-            'disable_undo_placeholder': True,
-            'score_to_win': True,
-            'ice_king_enabled': True,
-            'absolute_history': [copy.deepcopy(gs)]
+            'is_test': is_test
         }
-        app_state = "PLAYING"
-        play_sound('start')
+        app_state = "LOBBY"
+        play_sound('click')
         if is_test:
             pygame.display.set_caption("Hidden Chess - Partida Teste")
         else:
@@ -2607,9 +2594,10 @@ async def game_loop():
 
                 elif ev.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = ev.pos
-                    play_btn_y = WIN_H // 2 - 20
-                    play_btn_rect = pygame.Rect((WIN_W - 240) // 2, play_btn_y, 240, 52)
                     
+                    opts_start_y = WIN_H // 2 - 100
+                    play_btn_y = opts_start_y + 4 * 35 + 30
+                    play_btn_rect = pygame.Rect((WIN_W - 240) // 2, play_btn_y, 240, 52)
                     back_btn_y = play_btn_y + 80
                     back_btn_rect = pygame.Rect((WIN_W - 160) // 2, back_btn_y, 160, 44)
 
@@ -2623,13 +2611,14 @@ async def game_loop():
                         client_state['room_code'] = None
 
                     if client_state.get('my_color') != 'b':
+                        # Host clicks
                         if play_btn_rect.collidepoint((mx, my)):
                             if client_state.get('is_local', False):
                                 gs['game_started'] = True
-                                gs['fakeout_mode_enabled'] = True
-                                gs['disable_undo_placeholder'] = True
-                                gs['score_to_win'] = True
-                                gs['ice_king_enabled'] = True
+                                gs['fakeout_mode_enabled'] = gs.get('fakeout_mode_enabled', True)
+                                gs['disable_undo_placeholder'] = gs.get('disable_undo_placeholder', True)
+                                gs['score_to_win'] = gs.get('score_to_win', True)
+                                gs['ice_king_enabled'] = gs.get('ice_king_enabled', True)
                                 client_state['turn_start_snapshot'] = copy.deepcopy(gs)
                                 client_state['turn_history'] = [copy.deepcopy(gs)]
                                 client_state['history_index'] = 0
@@ -2642,12 +2631,42 @@ async def game_loop():
                                 else:
                                     pygame.display.set_caption("Hidden Chess - Partida Local")
                             else:
-                                if gs.get('opponent_joined', False):
+                                if gs.get('guest_ready', False):
                                     if websocket:
                                         await websocket.send(json.dumps({
                                             "type": "action",
                                             "action": "start_game"
                                         }))
+                        else:
+                            for c_key, c_rect in client_state.get('lobby_config_btns', {}).items():
+                                if c_rect.collidepoint((mx, my)):
+                                    play_sound('click')
+                                    new_val = not gs.get(c_key, True)
+                                    if client_state.get('is_local', False):
+                                        gs[c_key] = new_val
+                                    else:
+                                        action_map = {
+                                            'fakeout_mode_enabled': 'set_fakeout_mode',
+                                            'disable_undo_placeholder': 'set_disable_undo',
+                                            'score_to_win': 'set_score_to_win',
+                                            'ice_king_enabled': 'set_ice_king'
+                                        }
+                                        if websocket and c_key in action_map:
+                                            await websocket.send(json.dumps({
+                                                "type": "action",
+                                                "action": action_map[c_key],
+                                                c_key: new_val
+                                            }))
+                    else:
+                        # Guest clicks
+                        btn_ready = client_state.get('btn_ready_rect')
+                        if btn_ready and btn_ready.collidepoint((mx, my)):
+                            play_sound('click')
+                            if websocket:
+                                await websocket.send(json.dumps({
+                                    "type": "action",
+                                    "action": "toggle_guest_ready"
+                                }))
 
             elif app_state == "PLAYING":
                 is_local = client_state.get('is_local', False)
@@ -3681,7 +3700,10 @@ async def game_loop():
             draw_text_center(screen, "Aguardando", title_font, T_MAIN, WIN_H // 2 - 240)
             
             if client_state.get('is_local', False):
-                pass
+                if client_state.get('is_test'):
+                    draw_text_center(screen, "Modo Teste", fonts['small'], T_DIM, WIN_H // 2 - 200)
+                else:
+                    draw_text_center(screen, "Partida Local", fonts['small'], T_DIM, WIN_H // 2 - 200)
             else:
                 room_type = "Online"
                 draw_text_center(screen, room_type, fonts['small'], T_DIM, WIN_H // 2 - 200)
@@ -3691,13 +3713,44 @@ async def game_loop():
                 else:
                     draw_text_center(screen, "AGUARDANDO OPONENTE...", fonts['small'], T_DIM, WIN_H // 2 - 150)
 
-            play_btn_y = WIN_H // 2 - 20
+            opts_start_y = WIN_H // 2 - 100
+            is_host = client_state.get('my_color') != 'b'
+            
+            configs = [
+                ('fakeout_mode_enabled', "Modo Fakeout", gs.get('fakeout_mode_enabled', True)),
+                ('disable_undo_placeholder', "Esconder Placeholder (Undo)", gs.get('disable_undo_placeholder', True)),
+                ('score_to_win', "Vitória por Pontos (Fim das Peças)", gs.get('score_to_win', True)),
+                ('ice_king_enabled', "Rei de Gelo", gs.get('ice_king_enabled', True))
+            ]
+            
+            client_state['lobby_config_btns'] = {}
+            for i, (cfg_key, cfg_name, cfg_val) in enumerate(configs):
+                cy = opts_start_y + i * 35
+                
+                box_rect = pygame.Rect(WIN_W // 2 - 180, cy, 24, 24)
+                if is_host:
+                    client_state['lobby_config_btns'][cfg_key] = box_rect
+                    
+                color_box = (100, 200, 100) if cfg_val else (100, 100, 100)
+                pygame.draw.rect(screen, color_box, box_rect, border_radius=4)
+                
+                surf = fonts['small'].render(cfg_name, True, T_MAIN)
+                screen.blit(surf, (WIN_W // 2 - 140, cy + 2))
+
+            play_btn_y = opts_start_y + len(configs) * 35 + 30
             play_btn_rect = pygame.Rect((WIN_W - 240) // 2, play_btn_y, 240, 52)
 
-            if client_state.get('my_color') == 'b':
-                draw_text_center(screen, "AGUARDANDO O ANFITRIÃO INICIAR...", fonts['big'], (200, 200, 200), play_btn_rect.centery)
+            if not is_host:
+                guest_ready = gs.get('guest_ready', False)
+                play_hover = play_btn_rect.collidepoint(mouse)
+                btn_txt = "Pronto!" if guest_ready else "Pronto"
+                if guest_ready:
+                    draw_fancy_btn(screen, btn_txt, title_font, (35, 130, 65), (50, 160, 85), (255, 255, 255), play_btn_rect, is_hover=play_hover, custom_radius=8)
+                else:
+                    draw_fancy_btn(screen, btn_txt, title_font, (70, 70, 75), (90, 90, 95), (255, 255, 255), play_btn_rect, is_hover=play_hover, custom_radius=8)
+                client_state['btn_ready_rect'] = play_btn_rect
             else:
-                can_play = client_state.get('is_local', False) or gs.get('opponent_joined', False)
+                can_play = client_state.get('is_local', False) or gs.get('guest_ready', False)
                 play_hover = play_btn_rect.collidepoint(mouse) and can_play
                 if can_play:
                     draw_fancy_btn(screen, "Play", title_font, (35, 130, 65), (50, 160, 85), (255, 255, 255), play_btn_rect, is_hover=play_hover, custom_radius=8)

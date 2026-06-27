@@ -92,22 +92,25 @@ class MockWebsocket:
             # Apply exactly the same logic as server.py
             if action == 'set_fakeout_mode' and color == 'w':
                 gs['fakeout_mode_enabled'] = data.get('fakeout_mode_enabled', False)
+                gs['guest_ready'] = False
                 needs_broadcast = True
             elif action == 'set_disable_undo' and color == 'w':
                 gs['disable_undo_placeholder'] = data.get('disable_undo_placeholder', False)
+                gs['guest_ready'] = False
                 needs_broadcast = True
             elif action == 'set_score_to_win' and color == 'w':
                 gs['score_to_win'] = data.get('score_to_win', False)
+                gs['guest_ready'] = False
                 needs_broadcast = True
             elif action == 'set_ice_king' and color == 'w':
                 gs['ice_king_enabled'] = data.get('ice_king_enabled', False)
+                gs['guest_ready'] = False
+                needs_broadcast = True
+            elif action == 'toggle_guest_ready' and color == 'b':
+                gs['guest_ready'] = not gs.get('guest_ready', False)
                 needs_broadcast = True
             elif action == 'start_game' and color == 'w' and gs.get('opponent_joined', False):
                 gs['game_started'] = True
-                gs['fakeout_mode_enabled'] = True
-                gs['disable_undo_placeholder'] = True
-                gs['score_to_win'] = True
-                gs['ice_king_enabled'] = True
                 needs_broadcast = True
             elif action == 'rematch_request':
                 gs['rematch_requested_by'] = color
