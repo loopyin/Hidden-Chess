@@ -2643,12 +2643,20 @@ async def game_loop():
                                 else:
                                     pygame.display.set_caption("Hidden Chess - Partida Local")
                             else:
-                                if gs.get('opponent_joined', False):
+                                if gs.get('opponent_joined', False) and gs.get('guest_ready', False):
                                     if websocket:
                                         await websocket.send(json.dumps({
                                             "type": "action",
                                             "action": "start_game"
                                         }))
+                    else:
+                        if play_btn_rect.collidepoint((mx, my)) and not gs.get('guest_ready', False):
+                            if websocket:
+                                await websocket.send(json.dumps({
+                                    "type": "action",
+                                    "action": "guest_ready",
+                                    "ready": True
+                                }))
 
             elif app_state == "PLAYING":
                 is_local = client_state.get('is_local', False)
@@ -3687,18 +3695,27 @@ async def game_loop():
                 room_type = "Online"
                 draw_text_center(screen, room_type, fonts['small'], T_DIM, WIN_H // 2 - 200)
                 draw_text_center(screen, f"CÓDIGO DA SALA: {client_state.get('room_code', '').upper()}", fonts['small'], T_BLUE, WIN_H // 2 - 175)
-                if gs.get('opponent_joined', False):
-                    draw_text_center(screen, "OPONENTE CONECTADO!", fonts['small'], (100, 220, 100), WIN_H // 2 - 150)
+                if client_state.get('my_color') == 'b':
+                    draw_text_center(screen, "CONECTADO À SALA DO ANFITRIÃO", fonts['small'], (100, 220, 100), WIN_H // 2 - 150)
                 else:
-                    draw_text_center(screen, "AGUARDANDO OPONENTE...", fonts['small'], T_DIM, WIN_H // 2 - 150)
+                    if gs.get('guest_ready', False):
+                        draw_text_center(screen, "OPONENTE PRONTO!", fonts['small'], (100, 220, 100), WIN_H // 2 - 150)
+                    elif gs.get('opponent_joined', False):
+                        draw_text_center(screen, "OPONENTE CONECTADO! AGUARDANDO PRONTO...", fonts['small'], (200, 200, 100), WIN_H // 2 - 150)
+                    else:
+                        draw_text_center(screen, "AGUARDANDO OPONENTE...", fonts['small'], T_DIM, WIN_H // 2 - 150)
 
             play_btn_y = WIN_H // 2 - 20
             play_btn_rect = pygame.Rect((WIN_W - 240) // 2, play_btn_y, 240, 52)
 
             if client_state.get('my_color') == 'b':
-                draw_text_center(screen, "AGUARDANDO O ANFITRIÃO INICIAR...", fonts['big'], (200, 200, 200), play_btn_rect.centery)
+                if gs.get('guest_ready', False):
+                    draw_text_center(screen, "AGUARDANDO O ANFITRIÃO INICIAR...", fonts['big'], (200, 200, 200), play_btn_rect.centery)
+                else:
+                    ready_hover = play_btn_rect.collidepoint(mouse)
+                    draw_fancy_btn(screen, "Pronto", title_font, (35, 130, 65), (50, 160, 85), (255, 255, 255), play_btn_rect, is_hover=ready_hover, custom_radius=8)
             else:
-                can_play = client_state.get('is_local', False) or gs.get('opponent_joined', False)
+                can_play = client_state.get('is_local', False) or (gs.get('opponent_joined', False) and gs.get('guest_ready', False))
                 play_hover = play_btn_rect.collidepoint(mouse) and can_play
                 if can_play:
                     draw_fancy_btn(screen, "Play", title_font, (35, 130, 65), (50, 160, 85), (255, 255, 255), play_btn_rect, is_hover=play_hover, custom_radius=8)

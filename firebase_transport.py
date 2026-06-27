@@ -102,12 +102,15 @@ class MockWebsocket:
             elif action == 'set_ice_king' and color == 'w':
                 gs['ice_king_enabled'] = data.get('ice_king_enabled', False)
                 needs_broadcast = True
-            elif action == 'start_game' and color == 'w' and gs.get('opponent_joined', False):
+            elif action == 'start_game' and color == 'w' and gs.get('opponent_joined', False) and gs.get('guest_ready', False):
                 gs['game_started'] = True
                 gs['fakeout_mode_enabled'] = True
                 gs['disable_undo_placeholder'] = True
                 gs['score_to_win'] = True
                 gs['ice_king_enabled'] = True
+                needs_broadcast = True
+            elif action == 'guest_ready' and color == 'b':
+                gs['guest_ready'] = data.get('ready', True)
                 needs_broadcast = True
             elif action == 'rematch_request':
                 gs['rematch_requested_by'] = color
