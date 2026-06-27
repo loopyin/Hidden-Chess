@@ -27,6 +27,12 @@ class MockWebsocket:
             raise StopAsyncIteration
         return msg
 
+    async def recv(self):
+        msg = await self.queue.get()
+        if msg is None:
+            raise Exception("ConnectionClosed")
+        return msg
+
     async def send(self, message):
         # Process outgoing message locally, then update Firebase if needed
         data = json.loads(message)
@@ -43,7 +49,10 @@ class MockWebsocket:
             
             # Save to Firebase
             initial_state_json = json.dumps(serialize_state(self.gs, 'w'))
-            await firebase_client.create_room(self.room_code, self.token, initial_state_json)
+            success = await firebase_client.create_room(self.room_code, self.token, initial_state_json)
+            if not success:
+                await self.queue.put(json.dumps({"type": "error", "message": "Erro 403: Permissão negada no banco de dados."}))
+                return
             
             # Start listening to firebase
             self._start_listening()

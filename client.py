@@ -2160,8 +2160,13 @@ async def game_loop():
                     msg = await asyncio.wait_for(websocket.recv(), timeout=0.005)
 
                 data = json.loads(msg)
+                
+                if data['type'] == 'error':
+                    error_msg = data.get('message', "Erro no servidor.")
+                    app_state = "MENU"
+                    websocket = None
 
-                if data['type'] == 'room_created':
+                elif data['type'] == 'room_created':
                     client_state['room_code'] = data['room']
                     client_state['my_color'] = data['color']
                     app_state = "LOBBY"
