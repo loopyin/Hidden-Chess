@@ -1455,5 +1455,6 @@ def deserialize_state(data):
         'next_queue_w': data.get('next_queue_w', []),
         'next_queue_b': data.get('next_queue_b', []),
         'moved_this_turn': set(tuple(x) for x in data.get('moved_this_turn', [])),
-        'frozen_pieces': set(tuple(p) for p in data.get('frozen_pieces', []))
+        'frozen_pieces': set(tuple(p) for p in data.get('frozen_pieces', [])),
+        'white_controls_black': data.get('white_controls_black', False)
     }
