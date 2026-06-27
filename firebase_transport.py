@@ -104,6 +104,10 @@ class MockWebsocket:
                 needs_broadcast = True
             elif action == 'start_game' and color == 'w' and gs.get('opponent_joined', False):
                 gs['game_started'] = True
+                gs['fakeout_mode_enabled'] = True
+                gs['disable_undo_placeholder'] = True
+                gs['score_to_win'] = True
+                gs['ice_king_enabled'] = True
                 needs_broadcast = True
             elif action == 'rematch_request':
                 gs['rematch_requested_by'] = color

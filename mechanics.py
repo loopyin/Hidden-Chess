@@ -13,6 +13,8 @@ class MechanicsManager:
 
     @staticmethod
     def _is_active_turn(gs, client_state):
+        if client_state.get('is_local', False):
+            return True
         turn = gs['turn']
         my_color = client_state.get('my_color')
         total_plys = len(client_state.get('turn_history', []))

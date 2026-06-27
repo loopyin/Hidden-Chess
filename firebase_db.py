@@ -32,9 +32,9 @@ class FirebaseClient:
                 time.sleep(1)
                 continue
                 
-            url = f"{BASE_URL}/{self.room_code}?key={API_KEY}"
+            url = f"{BASE_URL}/{self.room_code}?key={API_KEY}&_t={int(time.time() * 1000)}"
             try:
-                req = urllib.request.Request(url)
+                req = urllib.request.Request(url, headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'})
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     if resp.status == 200:
                         data = json.loads(resp.read().decode('utf-8'))
