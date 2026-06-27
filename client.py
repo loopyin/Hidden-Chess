@@ -2181,6 +2181,7 @@ async def game_loop():
                 elif data['type'] == 'state_update':
                     client_state['waiting'] = False
                     new_gs = deserialize_state(data['state'])
+                    print("STATE UPDATE RECEIVED. opponent_joined:", new_gs.get('opponent_joined'))
                     
                     if new_gs.get('game_over') and not gs.get('game_over'):
                         play_sound('game_over')

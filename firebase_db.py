@@ -49,11 +49,10 @@ class FirebaseClient:
                                         tokens_fields = fields.get("tokens", {}).get("mapValue", {}).get("fields", {})
                                         if "b" in tokens_fields:
                                             state_dict = json.loads(state_str)
-                                            if not state_dict.get("opponent_joined"):
-                                                state_dict["opponent_joined"] = True
-                                                state_str = json.dumps(state_dict)
-                                    except Exception:
-                                        pass
+                                            state_dict["opponent_joined"] = True
+                                            state_str = json.dumps(state_dict)
+                                    except Exception as e:
+                                        print("opponent_joined inject error:", e)
                                     try:
                                         if self.on_state_update:
                                             self.on_state_update(state_str)
