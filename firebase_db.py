@@ -66,6 +66,8 @@ class FirebaseClient:
         self.polling = False
         
     async def create_room(self, room_code, token, initial_state_json):
+        self.room_code = room_code
+        self.token = token
         url = f"{BASE_URL}?documentId={room_code}&key={API_KEY}"
         doc = {
             "fields": {
@@ -93,6 +95,8 @@ class FirebaseClient:
         return await asyncio.to_thread(_post)
 
     async def join_room(self, room_code, token):
+        self.room_code = room_code
+        self.token = token
         url = f"{BASE_URL}/{room_code}?key={API_KEY}"
         
         def _join():
