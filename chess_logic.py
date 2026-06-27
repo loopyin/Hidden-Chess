@@ -1369,7 +1369,8 @@ def serialize_state(gs, player_color=None, dgs=None):
         'next_queue_w': clean_queue(gs.get('next_queue_w'), player_color == 'w', 'w'),
         'next_queue_b': clean_queue(gs.get('next_queue_b'), player_color == 'b', 'b'),
         'moved_this_turn': [list(x) for x in gs.get('moved_this_turn', set())],
-        'frozen_pieces': [list(p) for p in gs.get('frozen_pieces', set())]
+        'frozen_pieces': [list(p) for p in gs.get('frozen_pieces', set())],
+        'white_controls_black': gs.get('white_controls_black', False)
     }
 
     my_legals = {}

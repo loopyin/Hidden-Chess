@@ -138,7 +138,7 @@ def registrar_proximo_lance_auto(gs, client_state):
 
     h_active = client_state.get('history_active', False)
     is_local = client_state.get('is_local', False)
-    active_color = gs['turn'] if is_local else client_state.get('my_color')
+    active_color = gs['turn'] if (is_local or gs.get('white_controls_black', False)) else client_state.get('my_color')
 
     if not client_state.get('drafting'):
         temp_next_en = not h_active and gs['turn'] == active_color and (gs['normal_done'] or gs.get('hidden_count', 0) > 0)
@@ -2834,7 +2834,7 @@ async def game_loop():
 
             elif app_state == "PLAYING":
                 is_local = client_state.get('is_local', False)
-                active_color = gs['turn'] if is_local else client_state['my_color']
+                active_color = gs['turn'] if (is_local or gs.get('white_controls_black', False)) else client_state['my_color']
 
                 if ev.type == pygame.KEYDOWN:
                     if ev.key == pygame.K_LEFT:

@@ -410,6 +410,8 @@ async def handler(websocket):
                                         gs['log'].append(f"NEXT|{effective_color}|{note_msg}")
                             
                             end_turn(gs)
+                            if gs.get('debug_mode_enabled', False) and color == 'w':
+                                gs['white_controls_black'] = True
                             process_next_queues(gs)
                         else:
                             # No manual move, execute from queue
@@ -426,6 +428,8 @@ async def handler(websocket):
                                 process_next_queues(gs)
                             else:
                                 end_turn(gs)
+                                if gs.get('debug_mode_enabled', False) and color == 'w':
+                                    gs['white_controls_black'] = True
                                 process_next_queues(gs)
                         clear_gesture_state(gs)
                         
