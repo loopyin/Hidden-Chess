@@ -548,7 +548,14 @@ def normalize_last_move(gs_state):
     return None
 
 def should_animate_state_update(old_gs, new_gs):
+    state_event = new_gs.get('state_event')
+    if state_event == 'state_only':
+        return False
+
     new_last_move = normalize_last_move(new_gs)
+    if state_event == 'move':
+        return new_last_move is not None
+
     if not new_last_move:
         return False
     return (
@@ -1977,77 +1984,82 @@ async def game_loop():
                     client_state['waiting'] = False
                     new_gs = deserialize_state(data['state'])
                     new_last_move = normalize_last_move(new_gs)
+                    state_event = new_gs.get('state_event')
                     
                     if new_gs.get('game_over') and not gs.get('game_over'):
                         play_sound('game_over')
                     elif should_animate_state_update(gs, new_gs):
-                        fr, fc, tr, tc = new_last_move
-                        
-                        # Detect any captured piece on destination square before the move
-                        has_captured_piece_on_square = False
-                        if gs.get('board') and tr is not None and tc is not None and 0 <= tr < 8 and 0 <= tc < 8:
-                            has_captured_piece_on_square = gs['board'][tr][tc] is not None
-                        
-                        # Robust check of all new log entries to see if any represent a capture
-                        new_log_entries = []
-                        if gs.get('log') and len(new_gs.get('log', [])) > len(gs['log']):
-                            new_log_entries = new_gs['log'][len(gs['log']):]
-                        elif new_gs.get('log'):
-                            new_log_entries = [new_gs['log'][-1]]
-                        
-                        is_capture_by_log = False
-                        for entry in new_log_entries:
-                            norm_entry = entry.lower()
-                            if "capturado" in norm_entry or "capturada" in norm_entry:
-                                is_capture_by_log = True
-                                break
-                            if 'x' in norm_entry:
-                                without_xeque = norm_entry.replace("xeque", "")
-                                if 'x' in without_xeque:
+                        move_coords = new_last_move
+                        has_capture_context = move_coords is not None
+
+                        # When the update is a visible move, animate it. When the
+                        # move is hidden from this viewer, preserve the state update
+                        # but skip all movement-specific derivations.
+                        if has_capture_context:
+                            fr, fc, tr, tc = move_coords
+
+                            # Detect any captured piece on destination square before the move
+                            has_captured_piece_on_square = False
+                            if gs.get('board') and tr is not None and tc is not None and 0 <= tr < 8 and 0 <= tc < 8:
+                                has_captured_piece_on_square = gs['board'][tr][tc] is not None
+                            
+                            # Robust check of all new log entries to see if any represent a capture
+                            new_log_entries = []
+                            if gs.get('log') and len(new_gs.get('log', [])) > len(gs['log']):
+                                new_log_entries = new_gs['log'][len(gs['log']):]
+                            elif new_gs.get('log'):
+                                new_log_entries = [new_gs['log'][-1]]
+                            
+                            is_capture_by_log = False
+                            for entry in new_log_entries:
+                                norm_entry = entry.lower()
+                                if "capturado" in norm_entry or "capturada" in norm_entry:
                                     is_capture_by_log = True
                                     break
-                        
-                        cap_w = len(new_gs.get('captured_w', [])) > len(gs.get('captured_w', []))
-                        cap_b = len(new_gs.get('captured_b', [])) > len(gs.get('captured_b', []))
-                        is_capture = cap_w or cap_b or has_captured_piece_on_square or is_capture_by_log
-                        
-                        last_log = new_gs['log'][-1] if new_gs.get('log') else ""
-                        is_shadow = "HIDDEN" in last_log
-                        is_fakeout = "FAKEOUT" in last_log
-                        
-                        is_next_move = "[next]" in last_log.lower() if last_log else False
-                        
-                        abs_b_new = get_absolute_board(new_gs)
-                        if new_gs.get('game_over', False) and not gs.get('game_over', False):
-                            pass # Handled below by play_sound('game_over') ? Wait, no
+                                if 'x' in norm_entry:
+                                    without_xeque = norm_entry.replace("xeque", "")
+                                    if 'x' in without_xeque:
+                                        is_capture_by_log = True
+                                        break
                             
-                        if in_check(abs_b_new, new_gs['turn']):
-                            play_sound('check')
-                        elif is_capture:
-                            play_sound('capture')
-                        elif is_next_move:
-                            play_sound('next_move')
-                        else:
-                            play_sound('move')
-                        
-                        is_undo = new_gs.get('turn_count', 0) < gs.get('turn_count', 0) or (new_gs.get('turn_count', 0) == gs.get('turn_count', 0) and len(new_gs.get('log', [])) < len(gs.get('log', [])))
+                            cap_w = len(new_gs.get('captured_w', [])) > len(gs.get('captured_w', []))
+                            cap_b = len(new_gs.get('captured_b', [])) > len(gs.get('captured_b', []))
+                            is_capture = cap_w or cap_b or has_captured_piece_on_square or is_capture_by_log
+                            
+                            last_log = new_gs['log'][-1] if new_gs.get('log') else ""
+                            is_shadow = "HIDDEN" in last_log
+                            is_fakeout = "FAKEOUT" in last_log
+                            is_next_move = "[next]" in last_log.lower() if last_log else False
+                            
+                            abs_b_new = get_absolute_board(new_gs)
+                            if new_gs.get('game_over', False) and not gs.get('game_over', False):
+                                pass # Handled below by play_sound('game_over') ? Wait, no
+                                
+                            if in_check(abs_b_new, new_gs['turn']):
+                                play_sound('check')
+                            elif is_capture:
+                                play_sound('capture')
+                            elif is_next_move:
+                                play_sound('next_move')
+                            else:
+                                play_sound('move')
+                            
+                            is_undo = new_gs.get('turn_count', 0) < gs.get('turn_count', 0) or (new_gs.get('turn_count', 0) == gs.get('turn_count', 0) and len(new_gs.get('log', [])) < len(gs.get('log', [])))
 
-                        if is_undo:
-                            if gs.get('last_move'):
-                                fr_u, fc_u, tr_u, tc_u = gs['last_move']
-                                p_anim = gs['board'][tr_u][tc_u]
-                                if not p_anim:
-                                    for h_key in ['hidden_w', 'hidden_b']:
-                                        h_dict = gs.get(h_key, {})
-                                        pos_key = (tr_u, tc_u)
-                                        if pos_key in h_dict:
-                                            p_anim = h_dict[pos_key].piece
-                                            break
-                                if p_anim:
-                                    trigger_piece_anim(client_state, p_anim, tr_u, tc_u, fr_u, fc_u, is_shadow=False, is_fakeout=False, is_capture=False)
-                        else:
-                            if new_last_move:
-                                fr, fc, tr, tc = new_last_move
+                            if is_undo:
+                                if gs.get('last_move'):
+                                    fr_u, fc_u, tr_u, tc_u = gs['last_move']
+                                    p_anim = gs['board'][tr_u][tc_u]
+                                    if not p_anim:
+                                        for h_key in ['hidden_w', 'hidden_b']:
+                                            h_dict = gs.get(h_key, {})
+                                            pos_key = (tr_u, tc_u)
+                                            if pos_key in h_dict:
+                                                p_anim = h_dict[pos_key].piece
+                                                break
+                                    if p_anim:
+                                        trigger_piece_anim(client_state, p_anim, tr_u, tc_u, fr_u, fc_u, is_shadow=False, is_fakeout=False, is_capture=False)
+                            else:
                                 p_anim = new_gs['board'][tr][tc]
                                 if not p_anim:
                                     for h_key in ['hidden_w', 'hidden_b']:

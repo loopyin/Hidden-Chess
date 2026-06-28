@@ -18,6 +18,7 @@ class MockWebsocket:
         self.color = None
         self.token = None
         self.gs = None
+        self._last_broadcast_snapshot = None
         
     async def __aiter__(self):
         return self
@@ -300,12 +301,24 @@ class MockWebsocket:
 
     def _broadcast_state(self):
         # Update Firebase and local queue
-        state_json = json.dumps(serialize_state(self.gs, self.color))
+        state_payload = serialize_state(self.gs, self.color)
+
+        # Explicitly mark whether this update actually carried a board-changing
+        # move. The client can then avoid inferring movement from turn/log changes
+        # alone, which is brittle when the visible last_move is intentionally hidden.
+        prev = self._last_broadcast_snapshot or {}
+        if state_payload.get('last_move') and state_payload.get('last_move') != prev.get('last_move'):
+            state_payload['state_event'] = 'move'
+        else:
+            state_payload['state_event'] = 'state_only'
+
+        state_json = json.dumps(state_payload)
         asyncio.create_task(firebase_client.update_state(self.room_code, state_json, self.token, self.color))
         asyncio.create_task(self.queue.put(json.dumps({
             "type": "state_update",
-            "state": serialize_state(self.gs, self.color)
+            "state": state_payload
         })))
+        self._last_broadcast_snapshot = copy.deepcopy(state_payload)
         
     def _start_listening(self):
         def on_update(state_str):
@@ -316,6 +329,7 @@ class MockWebsocket:
                 # We deserialize and update our gs
                 new_gs = deserialize_state(state_dict)
                 self.gs = new_gs
+                self._last_broadcast_snapshot = copy.deepcopy(state_dict)
                 # Push to asyncio queue for the client to process
                 asyncio.run_coroutine_threadsafe(
                     self.queue.put(json.dumps({
