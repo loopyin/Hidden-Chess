@@ -49,7 +49,7 @@ class MockWebsocket:
             self.gs['online'] = {'w': True, 'b': False}
             
             # Save to Firebase
-            initial_state_json = json.dumps(serialize_state(self.gs, None))
+            initial_state_json = json.dumps(serialize_state(self.gs, 'w'))
             success = await firebase_client.create_room(self.room_code, self.token, initial_state_json)
             if not success:
                 await self.queue.put(json.dumps({"type": "error", "message": "Erro 403: Permissão negada no banco de dados."}))
@@ -93,24 +93,14 @@ class MockWebsocket:
             if action == 'set_fakeout_mode' and color == 'w':
                 gs['fakeout_mode_enabled'] = data.get('fakeout_mode_enabled', False)
                 needs_broadcast = True
-            elif action == 'set_disable_undo' and color == 'w':
-                gs['disable_undo_placeholder'] = data.get('disable_undo_placeholder', False)
-                needs_broadcast = True
             elif action == 'set_score_to_win' and color == 'w':
                 gs['score_to_win'] = data.get('score_to_win', False)
                 needs_broadcast = True
             elif action == 'set_ice_king' and color == 'w':
                 gs['ice_king_enabled'] = data.get('ice_king_enabled', False)
                 needs_broadcast = True
-            elif action == 'start_game' and color == 'w' and gs.get('opponent_joined', False) and gs.get('guest_ready', False):
+            elif action == 'start_game' and color == 'w' and gs.get('opponent_joined', False):
                 gs['game_started'] = True
-                gs['fakeout_mode_enabled'] = True
-                gs['disable_undo_placeholder'] = True
-                gs['score_to_win'] = True
-                gs['ice_king_enabled'] = True
-                needs_broadcast = True
-            elif action == 'guest_ready' and color == 'b':
-                gs['guest_ready'] = data.get('ready', True)
                 needs_broadcast = True
             elif action == 'rematch_request':
                 gs['rematch_requested_by'] = color
@@ -138,9 +128,7 @@ class MockWebsocket:
                     needs_broadcast = True
             
             elif gs['turn'] == color:
-                if action == 'undo' and gs.get('disable_undo_placeholder', False):
-                    pass
-                elif action == 'undo':
+                if action == 'undo':
                     if 'turn_start_snapshot' in gs:
                         current_time = gs['time_left'].copy()
                         restored = copy.deepcopy(gs['turn_start_snapshot'])
@@ -280,7 +268,7 @@ class MockWebsocket:
                             if gs.get('hidden_mode') and not can_afford(gs):
                                 pass
                             else:
-                                gesture_hidden = data.get('gesture_hidden', False) and gs.get('disable_undo_placeholder', False)
+                                gesture_hidden = data.get('gesture_hidden', False)
                                 is_hidden = gs.get('hidden_mode', False) or gesture_hidden
                                 is_fakeout = gs.get('fakeout_active', False)
                                 res = exec_move(gs, fr, fc, tr, tc, hidden_move=is_hidden, promo=promo)
@@ -297,7 +285,7 @@ class MockWebsocket:
                                 gs['ghost_capture_type'] = None
                                 gs['reveal_flashes'] = []
 
-                elif action == 'ice_king' and gs.get('ice_king_enabled', False) and gs.get('disable_undo_placeholder', False):
+                elif action == 'ice_king':
                     kr, kc = data['kr'], data['kc']
                     tr, tc = data['tr'], data['tc']
                     res = ice_king_interaction(gs, kr, kc, tr, tc)
@@ -312,7 +300,7 @@ class MockWebsocket:
 
     def _broadcast_state(self):
         # Update Firebase and local queue
-        state_json = json.dumps(serialize_state(self.gs, None))
+        state_json = json.dumps(serialize_state(self.gs, self.color))
         asyncio.create_task(firebase_client.update_state(self.room_code, state_json, self.token, self.color))
         asyncio.create_task(self.queue.put(json.dumps({
             "type": "state_update",
@@ -327,24 +315,14 @@ class MockWebsocket:
                 # If the state from Firebase has changes we need (like opponent moved, or joined)
                 # We deserialize and update our gs
                 new_gs = deserialize_state(state_dict)
-                
-                if self.gs:
-                    if new_gs['turn'] == self.gs['turn'] and new_gs['turn_count'] == self.gs['turn_count']:
-                        if 'turn_start_snapshot' in self.gs:
-                            new_gs['turn_start_snapshot'] = self.gs['turn_start_snapshot']
-                    else:
-                        clean_snapshot = copy.deepcopy(new_gs)
-                        new_gs['turn_start_snapshot'] = clean_snapshot
-                else:
-                    new_gs['turn_start_snapshot'] = copy.deepcopy(new_gs)
-                    
                 self.gs = new_gs
                 # Push to asyncio queue for the client to process
-                asyncio.create_task(
+                asyncio.run_coroutine_threadsafe(
                     self.queue.put(json.dumps({
                         "type": "state_update",
-                        "state": serialize_state(self.gs, self.color)
-                    }))
+                        "state": state_dict
+                    })),
+                    self.loop
                 )
             except Exception as e:
                 print("Error in on_update", e)

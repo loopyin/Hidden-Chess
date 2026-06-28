@@ -26,55 +26,41 @@ class FirebaseClient:
         self.on_error = None
         self.last_update_time = None
         
-    async def _poll_async(self):
+    def _poll(self):
         while self.polling:
             if not self.room_code:
-                await asyncio.sleep(1.0)
+                time.sleep(1)
                 continue
                 
-            url = f"{BASE_URL}/{self.room_code}?key={API_KEY}&_t={int(time.time() * 1000)}"
-            
-            def _do_poll():
-                req = urllib.request.Request(url, headers={'Cache-Control': 'no-cache', 'Pragma': 'no-cache'})
+            url = f"{BASE_URL}/{self.room_code}?key={API_KEY}"
+            try:
+                req = urllib.request.Request(url)
                 with urllib.request.urlopen(req, timeout=5) as resp:
                     if resp.status == 200:
-                        return resp.read().decode('utf-8')
-                return None
-                
-            try:
-                result = await asyncio.to_thread(_do_poll)
-                if result:
-                    data = json.loads(result)
-                    update_time = data.get("updateTime")
-                    if update_time != self.last_update_time:
-                        self.last_update_time = update_time
-                        fields = data.get("fields", {})
-                        if "state" in fields:
-                            state_str = fields["state"].get("stringValue")
-                            if state_str:
-                                try:
-                                    tokens_fields = fields.get("tokens", {}).get("mapValue", {}).get("fields", {})
-                                    if "b" in tokens_fields:
-                                        state_dict = json.loads(state_str)
-                                        state_dict["opponent_joined"] = True
-                                        state_str = json.dumps(state_dict)
-                                except Exception as e:
-                                    print("opponent_joined inject error:", e)
-                                try:
-                                    if self.on_state_update:
-                                        self.on_state_update(state_str)
-                                except Exception as e:
-                                    print("Error in callback:", e)
+                        data = json.loads(resp.read().decode('utf-8'))
+                        update_time = data.get("updateTime")
+                        if update_time != self.last_update_time:
+                            self.last_update_time = update_time
+                            fields = data.get("fields", {})
+                            if "state" in fields:
+                                state_str = fields["state"].get("stringValue")
+                                if state_str:
+                                    try:
+                                        if self.on_state_update:
+                                            self.on_state_update(state_str)
+                                    except Exception as e:
+                                        print("Error in callback:", e)
             except Exception as e:
                 pass
                 
-            await asyncio.sleep(1.0)
+            time.sleep(1.0)
             
     def start_polling(self, on_state_update, on_error=None):
         self.on_state_update = on_state_update
         self.on_error = on_error
         self.polling = True
-        asyncio.create_task(self._poll_async())
+        self.thread = threading.Thread(target=self._poll, daemon=True)
+        self.thread.start()
         
     def stop_polling(self):
         self.polling = False
@@ -158,26 +144,6 @@ class FirebaseClient:
                 if tokens.get("w", {}).get("stringValue") == token:
                     return True, {"color": "w", "reconnected": True}
                 if tokens.get("b", {}).get("stringValue") == token:
-                    state_str = fields.get("state", {}).get("stringValue", "{}")
-                    try:
-                        state_dict = json.loads(state_str)
-                        if not state_dict.get("opponent_joined"):
-                            state_dict["opponent_joined"] = True
-                            fields["state"] = {"stringValue": json.dumps(state_dict)}
-                            
-                            doc = {
-                                "fields": {
-                                    "state": fields.get("state"),
-                                    "tokens": {"mapValue": {"fields": tokens}}
-                                }
-                            }
-                            data_encoded = json.dumps(doc).encode('utf-8')
-                            patch_url = f"{BASE_URL}/{room_code}?updateMask.fieldPaths=state&updateMask.fieldPaths=tokens&key={API_KEY}"
-                            patch_req = urllib.request.Request(patch_url, data=data_encoded, headers={'Content-Type': 'application/json'}, method='PATCH')
-                            with urllib.request.urlopen(patch_req, timeout=10) as patch_resp:
-                                pass
-                    except Exception as e:
-                        print("join_room reconnect patch error:", e)
                     return True, {"color": "b", "reconnected": True}
                 return False, "Sala cheia"
                 
