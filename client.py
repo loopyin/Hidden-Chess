@@ -190,7 +190,7 @@ def load_assets():
     try:
         pygame.mixer.init()
         if os.path.exists(sounds_dir):
-            for sx in ['move', 'capture', 'check', 'game_over', 'hidden', 'hidden_off', 'fakeout', 'fakeout_off', 'click', 'select', 'toggle', 'start', 'undo', 'resign', 'next', 'end', 'next_move', 'spotted', 'fakeout_spotted', 'menu', 'freeze', 'unfreeze', 'error']:
+            for sx in ['move', 'capture', 'check', 'game_over', 'hidden', 'hidden_off', 'fakeout', 'fakeout_off', 'click', 'select', 'toggle', 'start', 'resign', 'next', 'end', 'next_move', 'spotted', 'fakeout_spotted', 'menu', 'freeze', 'unfreeze', 'error']:
                 for ext in ['.wav', '.ogg', '.raw']:
                     snd_path = os.path.join(sounds_dir, f"{sx}{ext}")
                     if os.path.exists(snd_path):
@@ -539,6 +539,23 @@ def check_draft_endable(draft_moves, base_end_en):
         has_any_real = any((m.get('type') == 'move' and not m.get('fakeout', False)) for m in draft_moves)
         return base_end_en or has_any_real
     return any((m.get('type') == 'move' and not m.get('fakeout', False)) for m in cur_dm)
+
+def normalize_last_move(gs_state):
+    last_move = gs_state.get('last_move')
+    if isinstance(last_move, (list, tuple)) and len(last_move) == 4:
+        if all(coord is not None for coord in last_move):
+            return tuple(last_move)
+    return None
+
+def should_animate_state_update(old_gs, new_gs):
+    new_last_move = normalize_last_move(new_gs)
+    if not new_last_move:
+        return False
+    return (
+        old_gs.get('last_move') != new_gs.get('last_move')
+        or len(new_gs.get('log', [])) > len(old_gs.get('log', []))
+        or old_gs.get('turn') != new_gs.get('turn')
+    )
 
 def draw_board(screen, gs, fonts, client_state, mouse):
     turn = gs['turn']
@@ -1959,11 +1976,12 @@ async def game_loop():
                 elif data['type'] == 'state_update':
                     client_state['waiting'] = False
                     new_gs = deserialize_state(data['state'])
+                    new_last_move = normalize_last_move(new_gs)
                     
                     if new_gs.get('game_over') and not gs.get('game_over'):
                         play_sound('game_over')
-                    elif gs.get('last_move') != new_gs.get('last_move') and new_gs.get('last_move') or len(new_gs.get('log', [])) > len(gs.get('log', [])) or gs.get('turn') != new_gs.get('turn'):
-                        fr, fc, tr, tc = new_gs.get('last_move', (None, None, None, None))
+                    elif should_animate_state_update(gs, new_gs):
+                        fr, fc, tr, tc = new_last_move
                         
                         # Detect any captured piece on destination square before the move
                         has_captured_piece_on_square = False
@@ -2028,8 +2046,8 @@ async def game_loop():
                                 if p_anim:
                                     trigger_piece_anim(client_state, p_anim, tr_u, tc_u, fr_u, fc_u, is_shadow=False, is_fakeout=False, is_capture=False)
                         else:
-                            if new_gs.get('last_move'):
-                                fr, fc, tr, tc = new_gs['last_move']
+                            if new_last_move:
+                                fr, fc, tr, tc = new_last_move
                                 p_anim = new_gs['board'][tr][tc]
                                 if not p_anim:
                                     for h_key in ['hidden_w', 'hidden_b']:
@@ -2230,58 +2248,8 @@ async def game_loop():
                                     input_text += char
                                 break
 
-                if ev.type == pygame.KEYDOWN:
-                    if (ev.key == pygame.K_RETURN or ev.key == pygame.K_KP_ENTER) and len(input_text) == 4:
-                        app_state = "CONNECTING"
-                        try: pygame.key.stop_text_input()
-                        except: pass
-                        gs = make_state()
-                        client_state = {
-                            'my_color': None,
-                            'waiting': True,
-                            'flipped': False,
-                            'selected': None,
-                            'legal_sq': [],
-                            'room_code': None,
-                            'is_typing': False,
-                            'msg_queue': deque(),
-                            'show_hidden': True,
-                            'resign_confirm': False,
-                            'panel_btns': {},
-                            'is_local': False,
-                            'fakeout_mode_enabled': False,
-                            'score_to_win': False
-                        }
-                        try:
-                            token = None
-                            session_data = load_session()
-                            if session_data and session_data.get('room_code') == input_text:
-                                token = session_data.get('session_token')
-                            client_state['conn_task'] = asyncio.create_task(connect_and_join(uri, "join_room", input_text, token))
-                        except Exception as e:
-                            error_msg = f"Falha ao conectar."
-                            app_state = "MENU"
-                    elif ev.key == pygame.K_BACKSPACE:
-                        input_text = input_text[:-1]
-                    elif ev.key == pygame.K_ESCAPE:
-                        app_state = "MENU"
-                        try: pygame.key.stop_text_input()
-                        except: pass
-                    elif len(input_text) < 4:
-                        if ev.unicode and ev.unicode.isalnum():
-                            input_text += ev.unicode.upper()
-                        elif pygame.K_a <= ev.key <= pygame.K_z:
-                            input_text += chr(ev.key).upper()
-                        elif pygame.K_0 <= ev.key <= pygame.K_9:
-                            input_text += chr(ev.key)
-
             elif app_state == "REPLAY_LIST":
-                if ev.type == pygame.KEYDOWN:
-                    if ev.key == pygame.K_ESCAPE:
-                        play_sound('click')
-                        app_state = "MENU"
-                        client_state.pop('replay_list', None)
-                elif ev.type == pygame.MOUSEBUTTONDOWN:
+                if ev.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = ev.pos
                     if 'replay_rects' in client_state:
                         for global_idx, rect in client_state['replay_rects'].items():
@@ -2336,11 +2304,7 @@ async def game_loop():
                         client_state['replay_page'] = min(max_page, client_state.get('replay_page', 0) + 1)
 
             elif app_state == "REPLAY_VIEW":
-                if ev.type == pygame.KEYDOWN:
-                    if ev.key == pygame.K_ESCAPE:
-                        play_sound('click')
-                        app_state = "REPLAY_LIST"
-                elif ev.type == pygame.MOUSEBUTTONDOWN:
+                if ev.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = ev.pos
                     if mx < BOARD_PX and BOARD_PX <= my < BOARD_PX + PANEL_H:
                         btns = client_state['panel_btns']
@@ -2365,16 +2329,7 @@ async def game_loop():
                                     play_sound('select')
 
             elif app_state == "LOBBY":
-                if ev.type == pygame.KEYDOWN:
-                    if ev.key == pygame.K_ESCAPE:
-                        if websocket:
-                            await websocket.send(json.dumps({"type": "leave_room"}))
-                            await websocket.close()
-                            websocket = None
-                        app_state = "MENU"
-                        client_state['room_code'] = None
-
-                elif ev.type == pygame.MOUSEBUTTONDOWN:
+                if ev.type == pygame.MOUSEBUTTONDOWN:
                     mx, my = ev.pos
                     play_btn_y = WIN_H // 2 - 20
                     play_btn_rect = pygame.Rect((WIN_W - 240) // 2, play_btn_y, 240, 52)
@@ -2419,143 +2374,7 @@ async def game_loop():
                 is_local = client_state.get('is_local', False)
                 active_color = gs['turn'] if is_local else client_state['my_color']
 
-                if ev.type == pygame.KEYDOWN:
-                    if ev.key == pygame.K_LEFT:
-                        idx = client_state.get('history_index', 0)
-                        if idx > 0:
-                            reverted_gs = client_state['turn_history'][idx]
-                            client_state['history_index'] = idx - 1
-                            client_state['selected'] = None
-                            client_state['legal_sq'] = []
-                            if reverted_gs.get('last_move'):
-                                fr_u, fc_u, tr_u, tc_u = reverted_gs['last_move']
-                                p_anim = reverted_gs['board'][tr_u][tc_u]
-                                if not p_anim:
-                                    for h_key in ['hidden_w', 'hidden_b']:
-                                        h_dict = reverted_gs.get(h_key, {})
-                                        pos_key = (tr_u, tc_u)
-                                        if pos_key in h_dict:
-                                            p_anim = h_dict[pos_key].piece
-                                            break
-                                if p_anim:
-                                    last_log = reverted_gs['log'][-1] if reverted_gs.get('log') else ""
-                                    is_sh = "HIDDEN" in last_log
-                                    is_fk = "FAKEOUT" in last_log
-                                    trigger_piece_anim(client_state, p_anim, tr_u, tc_u, fr_u, fc_u, is_shadow=is_sh, is_fakeout=is_fk, is_capture=False)
-                    elif ev.key == pygame.K_RIGHT:
-                        idx = client_state.get('history_index', 0)
-                        if idx < len(client_state.get('turn_history', [])) - 1:
-                            target_gs = client_state['turn_history'][idx + 1]
-                            client_state['history_index'] = idx + 1
-                            client_state['selected'] = None
-                            client_state['legal_sq'] = []
-                            if target_gs.get('last_move'):
-                                fr, fc, tr, tc = target_gs['last_move']
-                                p_anim = target_gs['board'][tr][tc]
-                                if not p_anim:
-                                    for h_key in ['hidden_w', 'hidden_b']:
-                                        h_dict = target_gs.get(h_key, {})
-                                        pos_key = (tr, tc)
-                                        if pos_key in h_dict:
-                                            p_anim = h_dict[pos_key].piece
-                                            break
-                                if p_anim:
-                                    last_log = target_gs['log'][-1] if target_gs.get('log') else ""
-                                    is_sh = "HIDDEN" in last_log
-                                    is_fk = "FAKEOUT" in last_log
-                                    trigger_piece_anim(client_state, p_anim, fr, fc, tr, tc, is_shadow=is_sh, is_fakeout=is_fk, is_capture=False)
-                    elif ev.key in (pygame.K_RETURN, pygame.K_SPACE) and gs['turn'] == active_color:
-                        h_active = client_state.get('history_active', False)
-                        q_key = f'next_queue_{gs["turn"]}'
-                        temp_end_en = not h_active and (gs['normal_done'] or gs.get('hidden_count', 0) > 0 or gs.get(q_key))
-                        if client_state.get('draft_moves'):
-                            temp_end_en = check_draft_endable(client_state['draft_moves'], temp_end_en)
-                        
-                        if temp_end_en:
-                            if is_local:
-                                dm = client_state.get('draft_moves', [])
-                                dm_copy = []
-                                for m in dm:
-                                    m_dict = copy.deepcopy(m)
-                                    if 'type' not in m_dict:
-                                        m_dict['type'] = 'move'
-                                    dm_copy.append(m_dict)
-                                if dm_copy and dm_copy[-1].get('type') != 'end_turn':
-                                    dm_copy.append({'type': 'end_turn'})
-                                q_key_kb = f"next_queue_{gs['turn']}"
-                                
-                                if gs.get('normal_done') or gs.get('hidden_count', 0) > 0:
-                                    # Manual move was made, check for matching
-                                    next_a = get_next_turn_from_queue(gs, gs['turn'])
-                                    if next_a:
-                                        if compare_turns(gs.get('current_turn_actions', []), next_a):
-                                            gs['pts'][gs['turn']] += 1
-                                        else:
-                                            gs['pts'][gs['turn']] -= 1
-                                        pop_next_turn_from_queue(gs, gs['turn'])
-                                    
-                                    # Invalidate existing queue turns if any? 
-                                    # Actually users said "limpa Next A e mantém Next B".
-                                    # The pop_next_turn_from_queue already does that if called.
-
-                                    if dm_copy and dm:
-                                        if q_key_kb not in gs: gs[q_key_kb] = []
-                                        gs[q_key_kb].extend(dm_copy)
-                                        for m in dm_copy:
-                                            if m.get('type') == 'move':
-                                                htxt = "[Fakeout] " if m.get('fakeout') else "[Sombra] " if m.get('hidden') else ""
-                                                note_msg = f"{htxt}{alg(m['fc'], m['fr'])} -> {alg(m['tc'], m['tr'])}"
-                                                gs['log'].append(f"NEXT|{gs['turn']}|{note_msg}")
-                                    end_turn(gs)
-                                else:
-                                    # No manual move, append new drafts to existing queue
-                                    if dm_copy and dm:
-                                        if q_key_kb not in gs: gs[q_key_kb] = []
-                                        gs[q_key_kb].extend(dm_copy)
-                                        for m in dm_copy:
-                                            if m.get('type') == 'move':
-                                                htxt = "[Fakeout] " if m.get('fakeout') else "[Sombra] " if m.get('hidden') else ""
-                                                note_msg = f"{htxt}{alg(m['fc'], m['fr'])} -> {alg(m['tc'], m['tr'])}"
-                                                gs['log'].append(f"NEXT|{gs['turn']}|{note_msg}")
-                                    
-                                    if gs.get(q_key_kb):
-                                        process_next_queues(gs)
-                                    else:
-                                        end_turn(gs)
-                                if in_check(get_absolute_board(gs), gs['turn']):
-                                    play_sound('check')
-                                if gs.get('reveal_flashes'):
-                                    for rf in gs['reveal_flashes']:
-                                        rr, rc = rf[0], rf[1]
-                                        rtype = rf[2] if len(rf) > 2 else 'hidden'
-                                        col = (245, 120, 20) if rtype == 'fakeout' else (60, 110, 220)
-                                        trigger_square_flash(client_state, rr, rc, col, rtype)
-                                    gs['reveal_flashes'] = []
-                                gs['hidden_mode'] = False
-                                client_state['turn_start_snapshot'] = copy.deepcopy(gs)
-                                client_state['turn_history'].append(copy.deepcopy(gs))
-                                client_state['history_index'] = len(client_state['turn_history']) - 1
-                                client_state['selected'] = None
-                                client_state['legal_sq'] = []
-                            else:
-                                dm = client_state.get('draft_moves', [])
-                                dm_copy = []
-                                for m in dm:
-                                    m_dict = copy.deepcopy(m)
-                                    if 'type' not in m_dict:
-                                        m_dict['type'] = 'move'
-                                    dm_copy.append(m_dict)
-                                if dm_copy and dm_copy[-1].get('type') != 'end_turn':
-                                    dm_copy.append({'type': 'end_turn'})
-                                    await websocket.send(json.dumps({"type": "action", "action": "end_turn", "draft_moves": dm_copy}))
-                                else:
-                                    await websocket.send(json.dumps({"type": "action", "action": "end_turn"}))
-                            client_state['drafting'] = False
-                            client_state['draft_moves'] = []
-                            client_state['selected'] = None
-                            client_state['legal_sq'] = []
-
-                elif ev.type == pygame.MOUSEBUTTONUP:
+                if ev.type == pygame.MOUSEBUTTONUP:
                     if client_state.get('is_dragging_gesture') and not client_state.get('waiting'):
                         mx, my = ev.pos
                         gs = await handle_gesture_release(mx, my, client_state, gs, is_local, websocket, screen, fonts)
