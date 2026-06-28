@@ -104,7 +104,7 @@ class MechanicsManager:
         screen.blit(ts_glow, ts_glow.get_rect(center=(tx + SQ // 2, ty + SQ // 2)))
 
     @staticmethod
-    def _execute_toggle_hidden_sync(gs, client_state, is_local, play_sound_fn, save_undo_fn, click_pos=None, force_shockwave=False):
+    def _execute_toggle_hidden_sync(gs, client_state, is_local, play_sound_fn, click_pos=None, force_shockwave=False):
         if not MechanicsManager.can_toggle_hidden(gs, client_state, ignore_restrictions=False):
             return False
             
@@ -117,9 +117,6 @@ class MechanicsManager:
             
         client_state['selected'] = None
         client_state['legal_sq'] = []
-        
-        if save_undo_fn:
-            save_undo_fn(client_state, gs)
         
         if client_state.get('drafting'):
             client_state['draft_hidden'] = not client_state.get('draft_hidden', False)
@@ -153,15 +150,15 @@ class MechanicsManager:
         return True
 
     @staticmethod
-    async def execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound_fn, save_undo_fn, click_pos=None, force_shockwave=False):
-        if not MechanicsManager._execute_toggle_hidden_sync(gs, client_state, is_local, play_sound_fn, save_undo_fn, click_pos, force_shockwave):
+    async def execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound_fn, click_pos=None, force_shockwave=False):
+        if not MechanicsManager._execute_toggle_hidden_sync(gs, client_state, is_local, play_sound_fn, click_pos, force_shockwave):
             return
 
         if not is_local and websocket:
             await websocket.send(json.dumps({"type": "action", "action": "toggle_hidden"}))
 
     @staticmethod
-    def _execute_toggle_fakeout_sync(gs, client_state, is_local, play_sound_fn, save_undo_fn, click_pos=None, force_shockwave=False):
+    def _execute_toggle_fakeout_sync(gs, client_state, is_local, play_sound_fn, click_pos=None, force_shockwave=False):
         if not MechanicsManager.can_toggle_fakeout(gs, client_state, ignore_restrictions=False):
             return False
             
@@ -173,9 +170,6 @@ class MechanicsManager:
             
         client_state['selected'] = None
         client_state['legal_sq'] = []
-        
-        if save_undo_fn:
-            save_undo_fn(client_state, gs)
         
         if client_state.get('drafting'):
             client_state['draft_fakeout'] = not client_state.get('draft_fakeout', False)
@@ -209,8 +203,8 @@ class MechanicsManager:
         return True
 
     @staticmethod
-    async def execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound_fn, save_undo_fn, click_pos=None, force_shockwave=False):
-        if not MechanicsManager._execute_toggle_fakeout_sync(gs, client_state, is_local, play_sound_fn, save_undo_fn, click_pos, force_shockwave):
+    async def execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound_fn, click_pos=None, force_shockwave=False):
+        if not MechanicsManager._execute_toggle_fakeout_sync(gs, client_state, is_local, play_sound_fn, click_pos, force_shockwave):
             return
 
         if not is_local and websocket:

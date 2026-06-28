@@ -128,17 +128,7 @@ class MockWebsocket:
                     needs_broadcast = True
             
             elif gs['turn'] == color:
-                if action == 'undo':
-                    if 'turn_start_snapshot' in gs:
-                        current_time = gs['time_left'].copy()
-                        restored = copy.deepcopy(gs['turn_start_snapshot'])
-                        restored['turn_start_snapshot'] = copy.deepcopy(gs['turn_start_snapshot'])
-                        restored['time_left'] = current_time
-                        self.gs = restored
-                        gs = self.gs
-                        needs_broadcast = True
-                
-                elif action == 'end_turn':
+                if action == 'end_turn':
                     dm = data.get('draft_moves', [])
                     q_key = f'next_queue_{color}'
 
@@ -285,7 +275,7 @@ class MockWebsocket:
                                 gs['ghost_capture_type'] = None
                                 gs['reveal_flashes'] = []
 
-                elif action == 'ice_king' and gs.get('ice_king_enabled', False):
+                elif action == 'ice_king':
                     kr, kc = data['kr'], data['kc']
                     tr, tc = data['tr'], data['tc']
                     res = ice_king_interaction(gs, kr, kc, tr, tc)
