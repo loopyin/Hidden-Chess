@@ -14,6 +14,7 @@ INIT = [
     ['wR', 'wN', 'wB', 'wQ', 'wK', 'wB', 'wN', 'wR'],
 ]
 
+
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional
 
@@ -34,19 +35,25 @@ class PieceMetaModifier:
 
 def pc(p): return p[0] if p else None
 
+
 def pt(p): return p[1] if p else None
+
 
 def opp(c): return 'b' if c == 'w' else 'w'
 
+
 def cpb(b): return [r[:] for r in b]
 
+
 def cpcr(cr): return dict(cr)
+
 
 def find_king(b, c):
     for r in range(8):
         for cc in range(8):
             if b[r][cc] == c + 'K': return (r, cc)
     return None
+
 
 def attacked(b, row, col, by):
     for dr, dc in [(1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)]:
@@ -73,9 +80,11 @@ def attacked(b, row, col, by):
         if 0 <= r < 8 and 0 <= c < 8 and b[r][c] == by + 'P': return True
     return False
 
+
 def in_check(b, c):
     k = find_king(b, c)
     return attacked(b, k[0], k[1], opp(c)) if k else False
+
 
 def pseudo(b, abs_b, row, fc, ep, cr):
     p = b[row][fc]
@@ -132,6 +141,7 @@ def pseudo(b, abs_b, row, fc, ep, cr):
                 cc += dc
     return mv
 
+
 def check_fakeout_collision(c, fr, fc, tr, tc, p, gs):
     abs_b = get_absolute_board(gs)
     target_piece = abs_b[tr][tc]
@@ -173,6 +183,7 @@ def check_fakeout_collision(c, fr, fc, tr, tc, p, gs):
         return True
 
     return False
+
 
 def legal(gs, row, fc):
     c = gs['turn']
@@ -236,6 +247,7 @@ def legal(gs, row, fc):
             res.append((tr, tc))
     return res
 
+
 def all_legal(gs):
     c = gs['turn']
     tb = get_true_board(gs, c)
@@ -245,6 +257,7 @@ def all_legal(gs):
             if pc(tb[r][cc]) == c:
                 for m in legal(gs, r, cc): mv.append((r, cc) + m)
     return mv
+
 
 def do_move(b, fr, fc, tr, tc, ep, cr, promo):
     p = b[fr][fc]
@@ -271,7 +284,9 @@ def do_move(b, fr, fc, tr, tc, ep, cr, promo):
         if fr == 0 and fc == 0: cr['bQ'] = False
         if fr == 0 and fc == 7: cr['bK'] = False
 
+
 def alg(fc, fr): return 'abcdefgh'[fc] + str(8 - fr)
+
 
 def notation(b, fr, fc, tr, tc, ep, promo):
     p = b[fr][fc]
@@ -288,6 +303,7 @@ def notation(b, fr, fc, tr, tc, ep, promo):
     if promo: n += '=' + promo
     return n
 
+
 def get_absolute_board(gs):
     b = cpb(gs['board'])
     for hidden_dict in [gs['hidden_w'], gs['hidden_b']]:
@@ -297,6 +313,7 @@ def get_absolute_board(gs):
             b[tr][tc] = p
     return b
 
+
 def get_true_board(gs, color):
     b = cpb(gs['board'])
     my_hidden = gs['hidden_w'] if color == 'w' else gs['hidden_b']
@@ -305,6 +322,7 @@ def get_true_board(gs, color):
         if pub_pos: b[pub_pos[0]][pub_pos[1]] = None
         b[tr][tc] = p
     return b
+
 
 def make_state():
     return dict(
@@ -351,6 +369,7 @@ def make_state():
         frozen_pieces=set()
     )
 
+
 def hidden_cost(gs):
     hs = gs.get('hidden_seq', {'w': 0, 'b': 0})
     seq = hs if isinstance(hs, int) else hs.get(gs['turn'], 0)
@@ -360,6 +379,7 @@ def fakeout_cost(gs):
     fs = gs.get('fakeout_seq', {'w': 0, 'b': 0})
     seq = fs if isinstance(fs, int) else fs.get(gs['turn'], 0)
     return 2 ** (seq + gs.get('fakeout_count', 0))
+
 
 def can_afford(gs):
     pts = gs['pts'][gs['turn']]
@@ -374,6 +394,7 @@ def can_afford_fakeout(gs):
         if pts < 0: return False
         return pts >= fakeout_cost(gs)
     return False
+
 
 def end_turn(gs, process_queue=False):
     if gs['game_over']: return
@@ -486,6 +507,7 @@ def end_turn(gs, process_queue=False):
     # if process_queue:
     #     process_next_queues(gs)
 
+
 def get_next_turn_from_queue(gs, color):
     q_key = f'next_queue_{color}'
     if not gs.get(q_key):
@@ -497,6 +519,7 @@ def get_next_turn_from_queue(gs, color):
         turn_actions.append(act)
     return turn_actions
 
+
 def pop_next_turn_from_queue(gs, color):
     q_key = f'next_queue_{color}'
     if not gs.get(q_key):
@@ -505,6 +528,7 @@ def pop_next_turn_from_queue(gs, color):
         act = gs[q_key].pop(0)
         if act.get('type') == 'end_turn':
             break
+
 
 def compare_turns(actions1, actions2):
     if len(actions1) != len(actions2):
@@ -519,6 +543,7 @@ def compare_turns(actions1, actions2):
                 if a1.get(f) != a2.get(f):
                     return False
     return True
+
 
 def process_next_queues(gs):
     from actions import deserialize_action, EndTurn, MovePiece
@@ -595,11 +620,14 @@ def process_next_queues(gs):
                     gs['normal_done'] = False
                 break
 
+
 def ice_king_interaction(gs, kr, kc, tr, tc):
     """
     Handles the Ice King logic: freezing/unfreezing ally pieces.
     Returns: 'frozen', 'unfrozen', or None
     """
+    if not gs.get('ice_king_enabled', False):
+        return None
     
     board = gs['board']
     c = gs['turn']
@@ -625,6 +653,7 @@ def ice_king_interaction(gs, kr, kc, tr, tc):
         gs['pts'][c] += val
         gs['log'].append(f"ICE|{c}| O rei congelou {alg(tc, tr)} (+{val}pt)")
         return 'frozen'
+
 
 def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
     board = gs['board']
@@ -903,12 +932,14 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         if fr == (7 if c == 'w' else 0) and fc == 7: gs['cr'][c + 'K'] = False
     return True
 
+
 def deactivate_plies(gs, plies):
     if 'shadow_history' not in gs:
         gs['shadow_history'] = {}
     for p_i in plies:
         if p_i in gs['shadow_history']:
             gs['shadow_history'][p_i]['active'] = False
+
 
 def check_conflict(gs, fr, fc, tr, tc):
     mover = gs['turn']
@@ -918,6 +949,8 @@ def check_conflict(gs, fr, fc, tr, tc):
     if (fr, fc) in my_captured: return ('src', fr, fc)
     if (tr, tc) in enemy_hidden: return ('dst', tr, tc)
     return None
+
+
 
 def get_ui_selection(gs, r, c, draft_moves=None):
     from draft_simulator import get_draft_state
@@ -976,6 +1009,7 @@ def get_ui_selection(gs, r, c, draft_moves=None):
                     legals = []
                 return (r, c), legals
             return None, []
+
 
 def serialize_state(gs, player_color=None, dgs=None):
     def convert_hidden(hd):
@@ -1347,6 +1381,7 @@ def serialize_state(gs, player_color=None, dgs=None):
     ret['my_legals'] = my_legals
 
     return ret
+
 
 def deserialize_state(data):
     def parse_hidden(hd):

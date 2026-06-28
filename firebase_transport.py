@@ -285,7 +285,7 @@ class MockWebsocket:
                                 gs['ghost_capture_type'] = None
                                 gs['reveal_flashes'] = []
 
-                elif action == 'ice_king':
+                elif action == 'ice_king' and gs.get('ice_king_enabled', False):
                     kr, kc = data['kr'], data['kc']
                     tr, tc = data['tr'], data['tc']
                     res = ice_king_interaction(gs, kr, kc, tr, tc)

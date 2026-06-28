@@ -100,6 +100,7 @@ def resource_path(relative_path):
         base_path = os.path.dirname(os.path.abspath(__file__))
     return os.path.join(base_path, relative_path)
 
+
 def load_fonts():
     font_path = resource_path(os.path.join("assets", "DejaVuSans.ttf"))
 
@@ -126,7 +127,12 @@ def load_fonts():
         pts=get_font(14, True), title=get_font(40, True)
     )
 
+
 def registrar_proximo_lance_auto(gs, client_state):
+    # O recurso Next automático deve ser exclusivo do disable undo
+    if not client_state.get('disable_undo_placeholder') and not gs.get('disable_undo_placeholder'):
+        return
+
     h_active = client_state.get('history_active', False)
     is_local = client_state.get('is_local', False)
     active_color = gs['turn'] if is_local else client_state.get('my_color')
@@ -149,8 +155,6 @@ def registrar_proximo_lance_auto(gs, client_state):
         return
 
     # Execute drafting logic
-    play_sound('next')
-    
     save_for_undo(client_state, gs)
     if client_state.get('drafting'):
         dm = client_state.get('draft_moves', [])
@@ -210,8 +214,10 @@ def play_sound(snd_name):
         except:
             pass
 
+
 def draw_rect_aa(surf, color, rect, radius=5, border=0):
     pygame.draw.rect(surf, color, rect, border, border_radius=radius)
+
 
 def spawn_particles(x, y, color, count, client_state, size=3, speed=150, life=0.3):
     if 'particles' not in client_state:
@@ -308,6 +314,7 @@ def trigger_unfreeze_effect(client_state, gs, r, c):
         'particles': []
     })
 
+
 def get_cached_serialized_state(client_state, target_gs, player_color):
     cache = client_state.setdefault('_serialize_cache', {})
     sig = (
@@ -344,6 +351,7 @@ def get_cached_serialized_state(client_state, target_gs, player_color):
         cache.clear()
     cache[sig] = res
     return res
+
 
 def serialize_game_to_dict(gs, client_state):
     # Convert sets to lists so they are JSON serializable
@@ -398,6 +406,7 @@ def serialize_game_to_dict(gs, client_state):
     }
     return export_data
 
+
 def load_replay_files():
     replay_list = []
     for f in os.listdir('.'):
@@ -423,6 +432,7 @@ def load_replay_files():
     replay_list.sort(key=lambda x: x.get('data', {}).get('timestamp', 0), reverse=True)
     return replay_list
 
+
 def get_cached_text(fonts, font_name, text, color, client_state):
     cache = client_state.setdefault('_text_cache', {})
     key = (font_name, text, color)
@@ -433,6 +443,7 @@ def get_cached_text(fonts, font_name, text, color, client_state):
     surf = fonts[font_name].render(text, True, color)
     cache[key] = surf
     return surf
+
 
 def get_entry_colors(e):
     # Default colors (muted dark)
@@ -475,6 +486,7 @@ def get_entry_colors(e):
         txt_col = (175, 175, 180)
     return bg, border, txt_col
 
+
 async def ask_promo(screen, fonts, player_col, websocket, client_state):
     opts = ['Q', 'R', 'B', 'N']
     bw, bh = 84, 84
@@ -515,6 +527,7 @@ async def ask_promo(screen, fonts, player_col, websocket, client_state):
                     if rect.collidepoint(ev.pos): return o
 
         await asyncio.sleep(0)
+
 
 def check_has_real_draft(draft_moves):
     if not draft_moves:
@@ -1306,6 +1319,7 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         stxt_s = 'Esconder' if show_active else 'Sombra'
         draw_btn(220, 64, 'show', stxt_s, True, show_active, BTN_N, BTN_H)
 
+        undo_bloqueado = False
         if client_state.get('is_test', False):
             undo_en = len(client_state.get('absolute_history', [])) > 0
         else:
@@ -1495,6 +1509,7 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
 
     return btns
 
+
 def draw_sidebar(screen, gs, fonts, client_state, mouse):
     if PORTRAIT:
         bg_rect = pygame.Rect(0, BOARD_PX + PANEL_H, BOARD_PX, WIN_H - (BOARD_PX + PANEL_H))
@@ -1505,6 +1520,7 @@ def draw_sidebar(screen, gs, fonts, client_state, mouse):
         pygame.draw.rect(screen, (22, 22, 26), bg_rect)
         pygame.draw.line(screen, (45, 45, 52), (BOARD_PX, 0), (BOARD_PX, WIN_H), 2)
 
+
 def draw_text_center(screen, text, font, color, y_pos, cx=None):
     surf = font.render(text, True, color)
     center_x = cx if cx is not None else (WIN_W // 2)
@@ -1512,7 +1528,11 @@ def draw_text_center(screen, text, font, color, y_pos, cx=None):
     screen.blit(surf, rect)
     return rect
 
+
 async def perform_undo_action(client_state, gs, is_local, websocket):
+    if gs.get('disable_undo_placeholder', False):
+        return gs
+
     now = pygame.time.get_ticks()
     if now - client_state.get('last_undo_time', 0) < 200:
         return gs
@@ -1609,6 +1629,7 @@ async def perform_undo_action(client_state, gs, is_local, websocket):
         client_state['undo_holding'] = False
     return gs
 
+
 async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, screen, fonts):
     if not client_state.get('is_dragging_gesture'):
         return gs
@@ -1641,7 +1662,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
             p_king = tb_k[sr][sc]
             p_target = tb_k[r][c]
             
-            if p_king and pt(p_king) == 'K' and p_target and pc(p_target) == gs['turn'] and pt(p_target) != 'K':
+            if p_king and pt(p_king) == 'K' and p_target and pc(p_target) == gs['turn'] and pt(p_target) != 'K' and gs.get('disable_undo_placeholder', False) and gs.get('ice_king_enabled', False):
                 # Interaction returns 'frozen', 'unfrozen' or None
                 res = ice_king_interaction(gs, sr, sc, r, c)
                 if res:
@@ -1819,6 +1840,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
 
     return gs
 
+
 async def wake_up_server(uri):
     pass
 
@@ -1922,6 +1944,7 @@ async def game_loop():
         gs = make_state()
         gs['game_started'] = True
         gs['fakeout_mode_enabled'] = True
+        gs['disable_undo_placeholder'] = True
         gs['score_to_win'] = True
         gs['ice_king_enabled'] = True
         client_state = {
@@ -1942,6 +1965,7 @@ async def game_loop():
             'turn_history': [copy.deepcopy(gs)],
             'history_index': 0,
             'fakeout_mode_enabled': True,
+            'disable_undo_placeholder': True,
             'score_to_win': True,
             'ice_king_enabled': True,
             'absolute_history': [copy.deepcopy(gs)]
@@ -2295,6 +2319,7 @@ async def game_loop():
                     else:
                         app_state = "LOBBY"
                         client_state['fakeout_mode_enabled'] = gs.get('fakeout_mode_enabled', True)
+                        client_state['disable_undo_placeholder'] = gs.get('disable_undo_placeholder', True)
                         client_state['score_to_win'] = gs.get('score_to_win', True)
                         client_state['ice_king_enabled'] = gs.get('ice_king_enabled', True)
 
@@ -2313,6 +2338,7 @@ async def game_loop():
                 pass
             except Exception as e:
                 print("Websocket error:", e)
+
 
         # C. Handle local and remote pygame events
         for ev in pygame.event.get():
@@ -2349,6 +2375,7 @@ async def game_loop():
                             'panel_btns': {},
                             'is_local': False,
                             'fakeout_mode_enabled': False,
+                            'disable_undo_placeholder': False,
                             'score_to_win': False
                         }
                         try:
@@ -2395,7 +2422,7 @@ async def game_loop():
                                 'is_typing': False, 'msg_queue': deque(),
                                 'show_hidden': False, 'resign_confirm': False,
                                 'panel_btns': {}, 'is_local': False, 'score_to_win': False,
-                                'fakeout_mode_enabled': False
+                                'fakeout_mode_enabled': False, 'disable_undo_placeholder': False
                             }
                             try:
                                 token = None
@@ -2442,6 +2469,7 @@ async def game_loop():
                             'panel_btns': {},
                             'is_local': False,
                             'fakeout_mode_enabled': False,
+                            'disable_undo_placeholder': False,
                             'score_to_win': False
                         }
                         try:
@@ -2510,6 +2538,7 @@ async def game_loop():
                                     'turn_history': loaded_history,
                                     'history_index': 0,
                                     'fakeout_mode_enabled': False,
+                                    'disable_undo_placeholder': False,
                                     'score_to_win': False,
                                     'absolute_history': [copy.deepcopy(gs)]
                                 }
@@ -2592,6 +2621,7 @@ async def game_loop():
                             if client_state.get('is_local', False):
                                 gs['game_started'] = True
                                 gs['fakeout_mode_enabled'] = True
+                                gs['disable_undo_placeholder'] = True
                                 gs['score_to_win'] = True
                                 gs['ice_king_enabled'] = True
                                 client_state['turn_start_snapshot'] = copy.deepcopy(gs)
@@ -2664,7 +2694,7 @@ async def game_loop():
                                     trigger_piece_anim(client_state, p_anim, fr, fc, tr, tc, is_shadow=is_sh, is_fakeout=is_fk, is_capture=False)
                     elif ev.key == pygame.K_f:
                         client_state['flipped'] = not client_state['flipped']
-                    elif ev.key == pygame.K_h and gs['turn'] == active_color:
+                    elif ev.key == pygame.K_h and gs['turn'] == active_color and not gs.get('disable_undo_placeholder', False):
                         turn = gs['turn']
                         my_color = client_state['my_color']
                         total_plys = len(client_state.get('turn_history', []))
@@ -2708,9 +2738,9 @@ async def game_loop():
                                         client_state['draft_fakeout'] = False
                             else:
                                 await websocket.send(json.dumps({"type": "action", "action": "toggle_hidden"}))
-                    elif ev.key == pygame.K_u and gs['turn'] == active_color:
+                    elif ev.key == pygame.K_u and gs['turn'] == active_color and not gs.get('disable_undo_placeholder', False):
                         gs = await perform_undo_action(client_state, gs, is_local, websocket)
-                    elif ev.key in (pygame.K_RETURN, pygame.K_SPACE) and gs['turn'] == active_color:
+                    elif ev.key in (pygame.K_RETURN, pygame.K_SPACE) and gs['turn'] == active_color and not gs.get('disable_undo_placeholder', False):
                         h_active = client_state.get('history_active', False)
                         q_key = f'next_queue_{gs["turn"]}'
                         temp_end_en = not h_active and (gs['normal_done'] or gs.get('hidden_count', 0) > 0 or gs.get(q_key))
@@ -3029,8 +3059,6 @@ async def game_loop():
                                 if not temp_next_en:
                                     continue
 
-                                play_sound('next')
-
                                 if (gs['normal_done'] or gs.get('hidden_count', 0) > 0):
                                     save_for_undo(client_state, gs)
                                     if client_state.get('drafting'):
@@ -3057,7 +3085,7 @@ async def game_loop():
                         client_state['last_sq_click_time'] = now
                         client_state['last_sq_click_coord'] = (r, c)
                         
-                        if prev_coord == (r, c) and (now - prev_time) <= 0.35:
+                        if gs.get('disable_undo_placeholder', False) and prev_coord == (r, c) and (now - prev_time) <= 0.35:
                             h_active = client_state.get('history_active', False)
                             q_key_dc = f'next_queue_{gs["turn"]}'
                             temp_end_en = not h_active and gs['turn'] == active_color and (gs['normal_done'] or gs.get('hidden_count', 0) > 0 or gs.get(q_key_dc))
@@ -3172,13 +3200,14 @@ async def game_loop():
                                 client_state['selected'] = sel
                                 client_state['legal_sq'] = legs
                                 play_sound('select')
-                                client_state['is_dragging_gesture'] = True
-                                client_state['drag_piece_sq'] = (r, c)
-                                client_state['drag_piece_name'] = p_on_sq
-                                client_state['drag_pos'] = (mx, my)
-                                client_state['gesture_timer'] = 0.0
-                                client_state['hidden_triggered'] = False
-                                client_state['fakeout_triggered'] = False
+                                if client_state.get('disable_undo_placeholder', gs.get('disable_undo_placeholder', False)):
+                                    client_state['is_dragging_gesture'] = True
+                                    client_state['drag_piece_sq'] = (r, c)
+                                    client_state['drag_piece_name'] = p_on_sq
+                                    client_state['drag_pos'] = (mx, my)
+                                    client_state['gesture_timer'] = 0.0
+                                    client_state['hidden_triggered'] = False
+                                    client_state['fakeout_triggered'] = False
                                 continue
 
                         if client_state['selected']:
@@ -3186,7 +3215,7 @@ async def game_loop():
                             target_p = tb[r][c]
                             
                             # --- ICE KING CHECK (Standard) ---
-                            if target_p and pt(tb[sr][sc]) == 'K' and pc(target_p) == gs['turn'] and pt(target_p) != 'K':
+                            if target_p and pt(tb[sr][sc]) == 'K' and pc(target_p) == gs['turn'] and pt(target_p) != 'K' and gs.get('disable_undo_placeholder', False) and gs.get('ice_king_enabled', False):
                                 res = ice_king_interaction(gs, sr, sc, r, c)
                                 if res:
                                     if res == 'frozen':
@@ -3778,6 +3807,7 @@ async def game_loop():
 
     pygame.quit()
     sys.exit()
+
 
 if __name__ == '__main__':
     asyncio.run(game_loop())
