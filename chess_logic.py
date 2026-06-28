@@ -1319,13 +1319,13 @@ def serialize_state(gs, player_color=None, dgs=None):
     elif player_color == 'b':
         safe_pts['w'] = '?'
 
-    hidden_w_safe = convert_hidden(gs['hidden_w']) if player_color == 'w' else {}
-    hidden_b_safe = convert_hidden(gs['hidden_b']) if player_color == 'b' else {}
+    hidden_w_safe = convert_hidden(gs['hidden_w']) if player_color in ('w', None) else {}
+    hidden_b_safe = convert_hidden(gs['hidden_b']) if player_color in ('b', None) else {}
 
     shadow_history_safe = {}
     for ply, info in gs.get('shadow_history', {}).items():
         ply_str = str(ply)
-        if info['color'] == player_color or not info['active'] or gs.get('game_over', False):
+        if player_color is None or info['color'] == player_color or not info['active'] or gs.get('game_over', False):
             shadow_history_safe[ply_str] = info
 
     ret = {

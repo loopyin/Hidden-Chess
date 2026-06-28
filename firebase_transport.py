@@ -49,7 +49,7 @@ class MockWebsocket:
             self.gs['online'] = {'w': True, 'b': False}
             
             # Save to Firebase
-            initial_state_json = json.dumps(serialize_state(self.gs, 'w'))
+            initial_state_json = json.dumps(serialize_state(self.gs, None))
             success = await firebase_client.create_room(self.room_code, self.token, initial_state_json)
             if not success:
                 await self.queue.put(json.dumps({"type": "error", "message": "Erro 403: Permissão negada no banco de dados."}))
@@ -312,7 +312,7 @@ class MockWebsocket:
 
     def _broadcast_state(self):
         # Update Firebase and local queue
-        state_json = json.dumps(serialize_state(self.gs, self.color))
+        state_json = json.dumps(serialize_state(self.gs, None))
         asyncio.create_task(firebase_client.update_state(self.room_code, state_json, self.token, self.color))
         asyncio.create_task(self.queue.put(json.dumps({
             "type": "state_update",
@@ -327,12 +327,23 @@ class MockWebsocket:
                 # If the state from Firebase has changes we need (like opponent moved, or joined)
                 # We deserialize and update our gs
                 new_gs = deserialize_state(state_dict)
+                
+                if self.gs:
+                    if new_gs['turn'] == self.gs['turn'] and new_gs['turn_count'] == self.gs['turn_count']:
+                        if 'turn_start_snapshot' in self.gs:
+                            new_gs['turn_start_snapshot'] = self.gs['turn_start_snapshot']
+                    else:
+                        clean_snapshot = copy.deepcopy(new_gs)
+                        new_gs['turn_start_snapshot'] = clean_snapshot
+                else:
+                    new_gs['turn_start_snapshot'] = copy.deepcopy(new_gs)
+                    
                 self.gs = new_gs
                 # Push to asyncio queue for the client to process
                 asyncio.create_task(
                     self.queue.put(json.dumps({
                         "type": "state_update",
-                        "state": state_dict
+                        "state": serialize_state(self.gs, self.color)
                     }))
                 )
             except Exception as e:
