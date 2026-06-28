@@ -128,7 +128,17 @@ class MockWebsocket:
                     needs_broadcast = True
             
             elif gs['turn'] == color:
-                if action == 'end_turn':
+                if action == 'undo':
+                    if 'turn_start_snapshot' in gs:
+                        current_time = gs['time_left'].copy()
+                        restored = copy.deepcopy(gs['turn_start_snapshot'])
+                        restored['turn_start_snapshot'] = copy.deepcopy(gs['turn_start_snapshot'])
+                        restored['time_left'] = current_time
+                        self.gs = restored
+                        gs = self.gs
+                        needs_broadcast = True
+                
+                elif action == 'end_turn':
                     dm = data.get('draft_moves', [])
                     q_key = f'next_queue_{color}'
 
