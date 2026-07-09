@@ -19,7 +19,7 @@ source.include_exts = py,png,jpg,kv,atlas,ttf,json,wav,ogg
 version = 1.5.2.1
 
 # (list) Application requirements
-requirements = python3==3.10.14,pygame
+requirements = python3==3.10.14,hostpython3==3.10.14,pygame
 
 # (str) Supported orientation (one of landscape, sensorLandscape, portrait or all)
 orientation = portrait
@@ -37,7 +37,7 @@ android.accept_sdk_license = True
 android.archs = arm64-v8a, armeabi-v7a
 
 # (str) python-for-android branch to use
-p4a.branch = master
+p4a.branch = develop
 
 [buildozer]
 
