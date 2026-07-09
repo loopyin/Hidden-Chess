@@ -3282,7 +3282,7 @@ async def game_loop():
                     screen.blit(psurf, (int(p['x'] - size), int(p['y'] - size)))
 
             draw_text_center(screen, "Hidden Chess", title_font, T_MAIN, menu_y_start - 80)
-            draw_text_center(screen, "v1.5.2.1", fonts['small'], T_DIM, menu_y_start - 40)
+            draw_text_center(screen, "v1.5.4", fonts['small'], T_DIM, menu_y_start - 40)
             
             draw_fancy_btn(screen, "Criar Jogo", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_create, is_hover=btn_create.collidepoint(mouse))
             draw_fancy_btn(screen, "Entrar no Jogo", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_join, is_hover=btn_join.collidepoint(mouse))

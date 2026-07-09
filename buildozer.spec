@@ -16,7 +16,7 @@ source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,ttf,json,wav,ogg
 
 # (str) Application versioning
-version = 1.5.2.1
+version = 1.5.4
 
 # (list) Application requirements
 requirements = python3==3.10.14,hostpython3==3.10.14,pygame
