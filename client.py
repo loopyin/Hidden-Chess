@@ -5,7 +5,7 @@ import traceback
 from collections import deque
 from chess_logic import GLYPHS, pt, pc, get_absolute_board, get_true_board, in_check, hidden_cost, check_conflict, \
     legal, serialize_state, deserialize_state, make_state, can_afford, can_afford_fakeout, exec_move, end_turn, alg, deactivate_plies, get_ui_selection, \
-    process_next_queues, get_next_turn_from_queue, pop_next_turn_from_queue, compare_turns, ice_king_interaction
+    process_next_queues, get_next_turn_from_queue, pop_next_turn_from_queue, compare_turns, ice_king_interaction, register_predict_move
 from mechanics import MechanicsManager
 from draft_simulator import get_draft_state
 from renderer import BoardRenderer
@@ -131,12 +131,15 @@ def registrar_proximo_lance_auto(gs, client_state):
     is_local = client_state.get('is_local', False)
     active_color = gs['turn'] if is_local else client_state.get('my_color')
 
+    can_fakeout = gs.get('hidden_count', 0) == 1 and gs.get('fakeout_count', 0) == 0 and not gs.get('fakeout_used', False)
+    cond = (gs.get('normal_done', False) or (gs.get('hidden_count', 0) > 0 and not can_fakeout))
+
     if not client_state.get('drafting'):
-        temp_next_en = not h_active and gs['turn'] == active_color and (gs['normal_done'] or gs.get('hidden_count', 0) > 0)
+        temp_next_en = not h_active and gs['turn'] == active_color and cond
     else:
         dm = client_state.get('draft_moves', [])
         if dm and dm[-1].get('type') != 'end_turn':
-            temp_next_en = not h_active and gs['turn'] == active_color and (gs['normal_done'] or gs.get('hidden_count', 0) > 0)
+            temp_next_en = not h_active and gs['turn'] == active_color and cond
         else:
             temp_next_en = False
 
@@ -230,8 +233,10 @@ def spawn_particles(x, y, color, count, client_state, size=3, speed=150, life=0.
         })
 
 def trigger_piece_anim(client_state, p, fr, fc, tr, tc, is_shadow=False, is_fakeout=False, is_capture=False):
+    from chess_logic import pc
     client_state['anim'] = {
         'p': p,
+        'color': pc(p) if p else None,
         'fr': fr, 'fc': fc,
         'tr': tr, 'tc': tc,
         't': 0.0,
@@ -456,10 +461,10 @@ def get_entry_colors(e):
         bg = (52, 34, 16)
         border = (95, 62, 24)
         txt_col = (255, 183, 77) # Orange (Fakeout)
-    elif color_type == 'next_cancelled':
+    elif color_type in ('next_cancelled', 'draft_normal', 'draft_hidden', 'draft_fakeout'):
         bg = (48, 24, 24)
         border = (85, 42, 42)
-        txt_col = (229, 115, 115) # Red (Desistir)
+        txt_col = (229, 115, 115) # Red (Desistir / Draft)
     elif color_type == 'next':
         bg = (48, 42, 18)
         border = (85, 75, 30)
@@ -547,13 +552,19 @@ def draw_board(screen, gs, fonts, client_state, mouse):
     sel = client_state['selected']
     legal_set = set(map(tuple, client_state['legal_sq']))
     last = gs['last_move']
-    show = client_state['show_hidden']
+    
+    # Vision is always active when game is over or in replay mode
+    is_ended = gs.get('game_over', False) or client_state.get('is_replay', False) or client_state.get('reconnected_game_over', False)
+    show = not client_state.get('hide_mechanics_ui', False) or is_ended
     
     my_color = client_state['my_color']
-    my_hidden = gs['hidden_w'] if my_color == 'w' else gs['hidden_b']
+    if my_color == 'spectator':
+        my_hidden = {}
+    else:
+        my_hidden = gs['hidden_w'] if my_color == 'w' else gs['hidden_b']
     is_drafting = client_state.get('drafting', False)
-    hmode = (client_state.get('draft_hidden', False) if is_drafting else gs['hidden_mode']) or client_state.get('hidden_triggered', False)
-    fmode = client_state.get('draft_fakeout', False) if is_drafting else gs.get('fakeout_active', False)
+    fmode = (client_state.get('draft_fakeout', False) if is_drafting else gs.get('fakeout_active', False)) or client_state.get('fakeout_triggered', False)
+    hmode = ((client_state.get('draft_hidden', False) if is_drafting else gs.get('hidden_mode', False)) or client_state.get('hidden_triggered', False)) and not fmode
 
     if client_state.get('history_active'):
         active_idx = client_state.get('history_index', 0)
@@ -571,7 +582,15 @@ def draw_board(screen, gs, fonts, client_state, mouse):
 
     abs_b = get_absolute_board(gs)
     tb = get_true_board(gs, my_color)
-    render_grid = BoardRenderer.get_render_state(gs, client_state, abs_b, tb, my_hidden, show)
+    if client_state.get('history_active'):
+        curr_dgs = gs
+    else:
+        try:
+            curr_dgs = get_draft_state(gs, client_state.get('draft_moves', [])) if client_state.get('drafting') else gs
+        except Exception:
+            curr_dgs = gs
+    curr_b = [r[:] for r in curr_dgs['board']]
+    render_grid = BoardRenderer.get_render_state(gs, client_state, abs_b, tb, my_hidden, show, curr_b)
 
     mx, my = mouse
     hover_r, hover_c = -1, -1
@@ -585,13 +604,13 @@ def draw_board(screen, gs, fonts, client_state, mouse):
     has_custom_board = 'board' in IMAGES
     if has_custom_board:
         board_img = IMAGES['board']
-        if hmode or fmode:
+        if (hmode or fmode) and show:
             board_img = board_img.copy()
             tint = pygame.Surface((BOARD_PX, BOARD_PX), pygame.SRCALPHA)
             if hmode:
-                tint.fill((0, 0, 50, 60))
+                tint.fill((0, 80, 200, 60))  # Azulada
             else:
-                tint.fill((50, 0, 0, 60))
+                tint.fill((200, 100, 0, 60)) # Alaranjada
             board_img.blit(tint, (0,0))
         screen.blit(board_img, (0, 0))
 
@@ -604,11 +623,11 @@ def draw_board(screen, gs, fonts, client_state, mouse):
             cell = render_grid[r][c]
 
             base = LIGHT if (r + c) % 2 == 0 else DARK
-            if hmode:
-                base = (max(0, base[0] - 40), base[1], min(255, base[2] + 30))
-            elif fmode:
-                base = (min(255, base[0] + 30), max(0, base[1] - 30), max(0, base[2] - 60))
-
+            if show:
+                if hmode:
+                    base = (max(0, base[0] - 40), base[1], min(255, base[2] + 50))
+                elif fmode:
+                    base = (min(255, base[0] + 50), max(0, base[1] - 20), max(0, base[2] - 60))
             if not has_custom_board:
                 pygame.draw.rect(screen, base, (x, y, SQ, SQ))
                 
@@ -617,12 +636,7 @@ def draw_board(screen, gs, fonts, client_state, mouse):
                 dark_surf.fill((0, 0, 0, 204)) # 80% darker
                 screen.blit(dark_surf, (x, y))
             
-            if cell.is_next_dest:
-                pygame.draw.rect(screen, (239, 68, 68), (x, y, SQ, SQ), 3)
-            if cell.next_chain_alpha > 0:
-                red_surf = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
-                red_surf.fill((239, 68, 68, cell.next_chain_alpha))
-                screen.blit(red_surf, (x, y))
+            fade_t = client_state.get('fill_fade_timer', 0.0)
 
             if hover_r == r and hover_c == c:
                 if client_state.get('is_dragging_gesture'):
@@ -648,145 +662,43 @@ def draw_board(screen, gs, fonts, client_state, mouse):
                 pulse = (math.sin(pygame.time.get_ticks() / 150.0) + 1.0) / 2.0
                 pulse_thickness = 2 + int(pulse * 3)
                 pygame.draw.rect(screen, (220, 240, 200), (x+1, y+1, SQ-2, SQ-2), pulse_thickness)
+                
+            fade_t = client_state.get('fill_fade_timer', 0.0)
+            if fade_t > 0 and 'fade_squares' in client_state:
+                for f_r, f_c, col, alpha, is_border in client_state['fade_squares']:
+                    if f_r == r and f_c == c:
+                        surf = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
+                        if is_border:
+                            pygame.draw.rect(surf, (*col, int(alpha * fade_t)), (0, 0, SQ, SQ), 3)
+                        else:
+                            surf.fill((*col, int(alpha * fade_t)))
+                        screen.blit(surf, (x, y))
 
             if cell.is_legal and not cell.is_legal_capture:
                 ds = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
                 pygame.draw.circle(ds, (0, 0, 0, 65), (SQ // 2, SQ // 2), SQ // 7)
                 screen.blit(ds, (x, y))
-
-            if cell.is_threatened or getattr(cell, 'is_legal_capture', False):
-                t = pygame.time.get_ticks() / 500.0
-                target_col = (240, 220, 60) if cell.is_threatened else (240, 60, 60)
-                cx, cy = x + SQ // 2, y + SQ // 2
-                
-                # Corner brackets
-                bracket_len = 16
-                bracket_thick = 4
-                margin = 4 + int(math.sin(t * math.pi) * 3) # Pulsing margin
-                
-                # Top-Left
-                pygame.draw.line(screen, target_col, (x + margin, y + margin), (x + margin + bracket_len, y + margin), bracket_thick)
-                pygame.draw.line(screen, target_col, (x + margin, y + margin), (x + margin, y + margin + bracket_len), bracket_thick)
-                # Top-Right
-                pygame.draw.line(screen, target_col, (x + SQ - margin - 1, y + margin), (x + SQ - margin - 1 - bracket_len, y + margin), bracket_thick)
-                pygame.draw.line(screen, target_col, (x + SQ - margin - 1, y + margin), (x + SQ - margin - 1, y + margin + bracket_len), bracket_thick)
-                # Bottom-Left
-                pygame.draw.line(screen, target_col, (x + margin, y + SQ - margin - 1), (x + margin + bracket_len, y + SQ - margin - 1), bracket_thick)
-                pygame.draw.line(screen, target_col, (x + margin, y + SQ - margin - 1), (x + margin, y + SQ - margin - 1 - bracket_len), bracket_thick)
-                # Bottom-Right
-                pygame.draw.line(screen, target_col, (x + SQ - margin - 1, y + SQ - margin - 1), (x + SQ - margin - 1 - bracket_len, y + SQ - margin - 1), bracket_thick)
-                pygame.draw.line(screen, target_col, (x + SQ - margin - 1, y + SQ - margin - 1), (x + SQ - margin - 1, y + SQ - margin - 1 - bracket_len), bracket_thick)
-                
-                # Inner crosshair subtle element
-                pygame.draw.circle(screen, target_col, (cx, cy), 4, 2)
+            elif cell.is_legal_capture:
+                ds = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
+                pygame.draw.circle(ds, (0, 0, 0, 65), (SQ // 2, SQ // 2), SQ // 2 - 4, 6)
+                screen.blit(ds, (x, y))
 
             # Draw blue/orange ink trail on the path if show is True
-            if show:
-                if cell.blue_path_alpha > 0:
-                    blue_surf = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
-                    blue_surf.fill((30, 110, 255, cell.blue_path_alpha))
-                    screen.blit(blue_surf, (x, y))
-                if cell.orange_path_alpha > 0:
-                    orange_surf = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
-                    orange_surf.fill((245, 120, 20, cell.orange_path_alpha))
-                    screen.blit(orange_surf, (x, y))
 
-            p = cell.piece
-            if client_state.get('is_dragging_gesture') and client_state.get('drag_piece_sq') == (r, c):
-                p = None
-            if p:
-                if p in IMAGES:
-                    img = IMAGES[p]
-                    if cell.ghost_alpha < 255:
-                        img = img.copy()
-                        img.set_alpha(cell.ghost_alpha)
-                    screen.blit(img, (x, y))
-                else:
-                    pc_col = (255, 255, 255) if pc(p) == 'w' else (25, 25, 25)
-                    ps = fonts['piece'].render(GLYPHS[p], True, pc_col)
-                    if cell.ghost_alpha < 255:
-                        ps.set_alpha(cell.ghost_alpha)
-                    screen.blit(ps, ps.get_rect(center=(x + SQ // 2, y + SQ // 2)))
-                
-                # --- ICE KING: Frozen piece indicator ---
-                if cell.is_frozen:
-                    from renderer import VisualEffectsRenderer
-                    t_sec = pygame.time.get_ticks() / 1000.0
-                    VisualEffectsRenderer.draw_freeze_overlay(screen, r, c, x, y, SQ, t_sec)
-                # ----------------------------------------
-                
-                if cell.is_fake_residual and show:
-                    pygame.draw.rect(screen, (245, 120, 20), (x, y, SQ, SQ), 3)
 
-            hp = cell.ghost_piece
-            if hp and show:
-                animating_here = False
-                if client_state.get('anim'):
-                    a = client_state['anim']
-                    if a['tr'] == r and a['tc'] == c and a['p'] == my_hidden[(r, c)].piece:
-                        animating_here = True
-                
-                if not animating_here:
-                    val = my_hidden[(r, c)]
-                    is_f = val.is_fakeout
-                    overlay_col = C_FAKEOUT if is_f else C_HIDDEN
-                    ht = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
-                    ht.fill((*overlay_col, 75))
-                    screen.blit(ht, (x, y))
-                    lk = fonts['small'].render('*', True, overlay_col)
-                    screen.blit(lk, (x + 3, y + 2))
-                    if hp in IMAGES:
-                        screen.blit(IMAGES[hp], (x, y))
-                    else:
-                        pc_col = (255, 255, 255) if pc(hp) == 'w' else (25, 25, 25)
-                        ps = fonts['piece'].render(GLYPHS[hp], True, pc_col)
-                        screen.blit(ps, ps.get_rect(center=(x + SQ // 2, y + SQ // 2)))
+    if last:
+        fr, fc, tr, tc = last
+        if flipped:
+            fr, fc = 7 - fr, 7 - fc
+            tr, tc = 7 - tr, 7 - tc
 
-            if cell.is_next_dest and cell.next_dest_piece:
-                next_p = cell.next_dest_piece
-                next_pc_col = (255, 255, 255) if pc(next_p) == 'w' else (25, 25, 25)
-                aura_surf = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
-                aura_text = fonts['piece'].render(GLYPHS[next_p], True, (239, 68, 68))
-                for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, -1), (-1, 1), (1, 1)]:
-                    aura_surf.blit(aura_text, aura_text.get_rect(center=(SQ // 2 + dx, SQ // 2 + dy)))
-                
-                nps = fonts['piece'].render(GLYPHS[next_p], True, next_pc_col)
-                aura_surf.blit(nps, nps.get_rect(center=(SQ // 2, SQ // 2)))
-                aura_surf.set_alpha(150)
-                screen.blit(aura_surf, (x, y))
+        start_pos = (fc * SQ + SQ // 2, fr * SQ + SQ // 2)
+        end_pos = (tc * SQ + SQ // 2, tr * SQ + SQ // 2)
 
-            if 'flashes' in client_state and (r, c) in client_state['flashes']:
-                val_flash = client_state['flashes'][(r, c)]
-                if isinstance(val_flash, dict):
-                    flash_time = val_flash['t']
-                    flash_color = val_flash.get('color', (235, 45, 45))
-                else:
-                    flash_time = val_flash
-                    flash_color = (235, 45, 45)
-                blink_duration = 0.18
-                current_blink = int(flash_time / blink_duration)
-                if current_blink < 2:
-                    t = flash_time % blink_duration
-                    p = t / blink_duration
-                    # Smooth glowing rising and fading beautifully
-                    alpha = int(225 * math.sin(p * math.pi))
-                    alpha = max(0, min(255, alpha))
-                    if alpha > 0:
-                        flash_surf = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
-                        flash_surf.fill((*flash_color, alpha))
-                        screen.blit(flash_surf, (x, y))
-
-            cc2 = DARK if (r + c) % 2 == 0 else LIGHT
-            if hmode:
-                cc2 = (max(0, cc2[0] - 40), cc2[1], min(255, cc2[2] + 30))
-            elif fmode:
-                cc2 = (min(255, cc2[0] + 30), max(0, cc2[1] - 30), max(0, cc2[2] - 60))
-            if rr == 7:
-                f = fonts['coord'].render('abcdefgh'[7 - cc if flipped else cc], True, cc2)
-                screen.blit(f, (x + SQ - f.get_width() - 3, y + SQ - f.get_height() - 2))
-            if cc == 0:
-                rv = fonts['coord'].render(str(rr + 1 if flipped else 8 - rr), True, cc2)
-                screen.blit(rv, (x + 3, y + 3))
+        arrow_surf = pygame.Surface((WIN_W, BOARD_PX), pygame.SRCALPHA)
+        pygame.draw.line(arrow_surf, (*C_LAST, 140), start_pos, end_pos, 5)
+        pygame.draw.circle(arrow_surf, (*C_LAST, 140), start_pos, 6)
+        screen.blit(arrow_surf, (0, 0))
 
     if show:
         for t_pos, val in my_hidden.items():
@@ -850,19 +762,162 @@ def draw_board(screen, gs, fonts, client_state, mouse):
                             
                     screen.blit(trail_surf, (0, 0))
 
-    if last:
-        fr, fc, tr, tc = last
-        if flipped:
-            fr, fc = 7 - fr, 7 - fc
-            tr, tc = 7 - tr, 7 - tc
+    draft_sequences_to_draw = []
+    
+    if client_state.get('draft_moves'):
+        draft_sequences_to_draw.append([m for m in client_state['draft_moves'] if m.get('type') == 'move'])
+        
+    my_color = client_state.get('my_color', 'w')
+    
+    if not client_state.get('draft_moves') and gs.get(f'next_queue_{my_color}'):
+        draft_sequences_to_draw.append([m for m in gs[f'next_queue_{my_color}'] if m.get('type') == 'move'])
+        
+    opp_color = 'b' if my_color == 'w' else 'w'
+    if gs.get(f'next_queue_{opp_color}'):
+        draft_sequences_to_draw.append([m for m in gs[f'next_queue_{opp_color}'] if m.get('type') == 'move'])
 
-        start_pos = (fc * SQ + SQ // 2, fr * SQ + SQ // 2)
-        end_pos = (tc * SQ + SQ // 2, tr * SQ + SQ // 2)
+    for d_moves in draft_sequences_to_draw:
+        N = len(d_moves)
+        if N > 0:
+            trail_surf = pygame.Surface((WIN_W, BOARD_PX), pygame.SRCALPHA)
+            for i, d_move in enumerate(d_moves):
+                p1 = (d_move['fr'], d_move['fc'])
+                p2 = (d_move['tr'], d_move['tc'])
+                
+                fr_disp = 7 - p1[0] if flipped else p1[0]
+                fc_disp = 7 - p1[1] if flipped else p1[1]
+                tr_disp = 7 - p2[0] if flipped else p2[0]
+                tc_disp = 7 - p2[1] if flipped else p2[1]
+                
+                start_pos = (fc_disp * SQ + SQ // 2, fr_disp * SQ + SQ // 2)
+                end_pos = (tc_disp * SQ + SQ // 2, tr_disp * SQ + SQ // 2)
+                
+                ratio = (i + 1) / N
+                line_alpha = int(45 + 135 * ratio)
+                color = (235, 45, 45, line_alpha)
+                
+                pygame.draw.line(trail_surf, color, start_pos, end_pos, 4)
+                pygame.draw.circle(trail_surf, color, start_pos, 5)
+                pygame.draw.circle(trail_surf, color, end_pos, 5)
+            screen.blit(trail_surf, (0, 0))
 
-        arrow_surf = pygame.Surface((WIN_W, BOARD_PX), pygame.SRCALPHA)
-        pygame.draw.line(arrow_surf, (*C_LAST, 140), start_pos, end_pos, 5)
-        pygame.draw.circle(arrow_surf, (*C_LAST, 140), start_pos, 6)
-        screen.blit(arrow_surf, (0, 0))
+    for rr in range(8):
+        for cc in range(8):
+            r = 7 - rr if flipped else rr
+            c = 7 - cc if flipped else cc
+            x, y = cc * SQ, rr * SQ
+            cell = render_grid[r][c]
+
+            p = cell.piece
+            if client_state.get('is_dragging_gesture') and client_state.get('drag_piece_sq') == (r, c):
+                p = None
+            if p:
+                if p in IMAGES:
+                    img = IMAGES[p]
+                    if cell.ghost_alpha < 255:
+                        img = img.copy()
+                        img.set_alpha(cell.ghost_alpha)
+                    screen.blit(img, (x, y))
+                else:
+                    pc_col = (255, 255, 255) if pc(p) == 'w' else (25, 25, 25)
+                    ps = fonts['piece'].render(GLYPHS[p], True, pc_col)
+                    if cell.ghost_alpha < 255:
+                        ps.set_alpha(cell.ghost_alpha)
+                    screen.blit(ps, ps.get_rect(center=(x + SQ // 2, y + SQ // 2)))
+                
+                # --- ICE KING: Frozen piece indicator ---
+                if cell.is_frozen:
+                    from renderer import VisualEffectsRenderer
+                    t_sec = pygame.time.get_ticks() / 1000.0
+                    VisualEffectsRenderer.draw_freeze_overlay(screen, r, c, x, y, SQ, t_sec)
+                # ----------------------------------------
+                
+
+
+            hp = cell.ghost_piece
+            if hp and show:
+                animating_here = False
+                if client_state.get('anim'):
+                    a = client_state['anim']
+                    if a['tr'] == r and a['tc'] == c and a['p'] == my_hidden[(r, c)].piece:
+                        animating_here = True
+                
+                if not animating_here:
+                    val = my_hidden[(r, c)]
+                    is_f = val.is_fakeout
+                    overlay_col = C_FAKEOUT if is_f else C_HIDDEN
+                    aura_surf = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
+                    if hp in IMAGES:
+                        img_hp = IMAGES[hp].copy()
+                        mask = pygame.mask.from_surface(img_hp)
+                        sil = mask.to_surface(setcolor=(*overlay_col, 255), unsetcolor=(0, 0, 0, 0))
+                        for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, -1), (-1, 1), (1, 1)]:
+                            aura_surf.blit(sil, (dx, dy))
+                        aura_surf.blit(img_hp, (0, 0))
+                    else:
+                        pc_col = (255, 255, 255) if pc(hp) == 'w' else (25, 25, 25)
+                        aura_text = fonts['piece'].render(GLYPHS[hp], True, overlay_col)
+                        for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, -1), (-1, 1), (1, 1)]:
+                            aura_surf.blit(aura_text, aura_text.get_rect(center=(SQ // 2 + dx, SQ // 2 + dy)))
+                        nps = fonts['piece'].render(GLYPHS[hp], True, pc_col)
+                        aura_surf.blit(nps, nps.get_rect(center=(SQ // 2, SQ // 2)))
+                    
+                    aura_surf.set_alpha(76)
+                    screen.blit(aura_surf, (x, y))
+
+            if cell.is_next_dest and cell.next_dest_piece:
+                next_p = cell.next_dest_piece
+                aura_surf = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
+                if next_p in IMAGES:
+                    img_next = IMAGES[next_p].copy()
+                    mask = pygame.mask.from_surface(img_next)
+                    red_sil = mask.to_surface(setcolor=(239, 68, 68, 255), unsetcolor=(0, 0, 0, 0))
+                    for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, -1), (-1, 1), (1, 1)]:
+                        aura_surf.blit(red_sil, (dx, dy))
+                    aura_surf.blit(img_next, (0, 0))
+                else:
+                    next_pc_col = (255, 255, 255) if pc(next_p) == 'w' else (25, 25, 25)
+                    aura_text = fonts['piece'].render(GLYPHS[next_p], True, (239, 68, 68))
+                    for dx, dy in [(-2, 0), (2, 0), (0, -2), (0, 2), (-1, -1), (1, -1), (-1, 1), (1, 1)]:
+                        aura_surf.blit(aura_text, aura_text.get_rect(center=(SQ // 2 + dx, SQ // 2 + dy)))
+                    nps = fonts['piece'].render(GLYPHS[next_p], True, next_pc_col)
+                    aura_surf.blit(nps, nps.get_rect(center=(SQ // 2, SQ // 2)))
+                
+                aura_surf.set_alpha(120)
+                screen.blit(aura_surf, (x, y))
+
+            if 'flashes' in client_state and (r, c) in client_state['flashes']:
+                val_flash = client_state['flashes'][(r, c)]
+                if isinstance(val_flash, dict):
+                    flash_time = val_flash['t']
+                    flash_color = val_flash.get('color', (235, 45, 45))
+                else:
+                    flash_time = val_flash
+                    flash_color = (235, 45, 45)
+                blink_duration = 0.18
+                current_blink = int(flash_time / blink_duration)
+                if current_blink < 2:
+                    t = flash_time % blink_duration
+                    p = t / blink_duration
+                    # Smooth glowing rising and fading beautifully
+                    alpha = int(225 * math.sin(p * math.pi))
+                    alpha = max(0, min(255, alpha))
+                    if alpha > 0:
+                        flash_surf = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
+                        flash_surf.fill((*flash_color, alpha))
+                        screen.blit(flash_surf, (x, y))
+
+            cc2 = DARK if (r + c) % 2 == 0 else LIGHT
+            if hmode:
+                cc2 = (max(0, cc2[0] - 40), cc2[1], min(255, cc2[2] + 30))
+            elif fmode:
+                cc2 = (min(255, cc2[0] + 30), max(0, cc2[1] - 30), max(0, cc2[2] - 60))
+            if rr == 7:
+                f = fonts['coord'].render('abcdefgh'[7 - cc if flipped else cc], True, cc2)
+                screen.blit(f, (x + SQ - f.get_width() - 3, y + SQ - f.get_height() - 2))
+            if cc == 0:
+                rv = fonts['coord'].render(str(rr + 1 if flipped else 8 - rr), True, cc2)
+                screen.blit(rv, (x + 3, y + 3))
 
     if client_state.get('anim'):
         a = client_state['anim']
@@ -960,7 +1015,7 @@ def draw_board(screen, gs, fonts, client_state, mouse):
                 screen.blit(ps, ps.get_rect(center=(mx, my)))
                 
             if not is_fake:
-                hold_p = min(1.0, client_state.get('gesture_timer', 0.0) / 6.0)
+                hold_p = min(1.0, client_state.get('gesture_timer', 0.0) / 4.5)
                 if hold_p > 0.01:
                     bar_w = 40
                     bar_h = 5
@@ -1051,8 +1106,8 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
 
     turn = gs['turn']
     my_color = client_state['my_color']
-    hmode = MechanicsManager.is_hidden_on(gs, client_state)
-    fmode = MechanicsManager.is_fakeout_on(gs, client_state)
+    fmode = MechanicsManager.is_fakeout_on(gs, client_state) or client_state.get('fakeout_triggered', False)
+    hmode = (MechanicsManager.is_hidden_on(gs, client_state) or client_state.get('hidden_triggered', False)) and not fmode
 
     turn_hist = client_state.get('turn_history', [])
     total_plys = len(turn_hist)
@@ -1063,8 +1118,12 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         status = f"HISTÓRICO: Lance {active_idx} de {total_plys - 1}"
         sc = (160, 160, 160)
     elif client_state['waiting']:
-        status = "Aguardando Oponente..."
-        sc = T_RED
+        if client_state.get('reconnected_game_over'):
+            status = "Fim de Jogo"
+            sc = T_RED
+        else:
+            status = "Aguardando Oponente..."
+            sc = T_RED
     elif gs['game_over']:
         if client_state.get('export_success_msg'):
             status = client_state['export_success_msg']
@@ -1073,28 +1132,23 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
             status = gs['game_over_msg']
             sc = T_RED
     elif turn != my_color:
-        status = "Turno do Oponente"
+        status = "Vez do oponente"
         sc = T_DIM
     elif hmode:
-        cost = hidden_cost(gs)
-        avail = gs['pts'][turn]
-        seq_val = gs.get('hidden_seq', {'w': 0, 'b': 0})
-        seq = seq_val.get(turn, 0) if isinstance(seq_val, dict) else seq_val
-        if seq > 0:
-            status = f'Modo oculto | custo: {cost}pt | possui: {avail}pt (Seq: {seq})'
-        else:
-            status = f'Modo oculto | custo: {cost}pt | possui: {avail}pt'
-        sc = (150, 200, 255)
+        status = 'Sua vez'
+        sc = (100, 181, 246)
     elif fmode:
-        cost = fakeout_cost(gs)
-        avail = gs['pts'][turn]
-        status = f'Modo fakeout | custo: {cost}pt | possui: {avail}pt'
+        status = 'Sua vez'
         sc = (245, 120, 20)
     elif gs['normal_done']:
-        status = 'Seu Turno — aguardando encerramento'
-        sc = T_MAIN
+        if client_state.get('predicting_mode'):
+            status = 'Predicting...'
+            sc = (255, 235, 59)
+        else:
+            status = 'Drafting...'
+            sc = (229, 115, 115)
     else:
-        status = 'Seu Turno — movimento normal ou aperte H'
+        status = 'Sua vez'
         sc = T_MAIN
 
     st = fonts['big'].render(status, True, sc)
@@ -1106,30 +1160,33 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         draw_rect_aa(screen, (80, 120, 220), pill_rect, 12, 1)
     elif fmode:
         draw_rect_aa(screen, (245, 120, 20), pill_rect, 12, 1)
+    elif gs['normal_done']:
+        if client_state.get('predicting_mode'):
+            draw_rect_aa(screen, (255, 235, 59), pill_rect, 12, 1)
+        else:
+            draw_rect_aa(screen, (229, 115, 115), pill_rect, 12, 1)
     elif turn == my_color and not client_state['waiting'] and not history_active:
         draw_rect_aa(screen, (80, 80, 90), pill_rect, 12, 1)
     screen.blit(st, st_rect)
 
-    wb_rect = pygame.Rect(BOARD_PX - 185, BOARD_PX + 25, 80, 36)
-    bb_rect = pygame.Rect(BOARD_PX - 95, BOARD_PX + 25, 80, 36)
-
-    draw_rect_aa(screen, (240, 240, 235), wb_rect, 6)
-    draw_rect_aa(screen, (30, 30, 34), bb_rect, 6)
-    draw_rect_aa(screen, (70, 70, 75), bb_rect, 6, 1)
-
-    w_col = (30, 30, 30) if gs['turn'] == 'w' else (120, 120, 120)
-    b_col = (230, 230, 230) if gs['turn'] == 'b' else (120, 120, 120)
-
     is_drafting = client_state.get('drafting', False)
-    if is_drafting or client_state.get('draft_moves'):
-        pts_state = get_draft_state(gs, client_state.get('draft_moves', []))
+    if (is_drafting or client_state.get('draft_moves')) and not history_active:
+        try:
+            pts_state = get_draft_state(gs, client_state.get('draft_moves', []))
+        except Exception:
+            pts_state = gs
     else:
         pts_state = gs
 
-    wlbl = fonts['pts'].render(f"B: {pts_state['pts']['w']} pt", True, w_col)
-    blbl = fonts['pts'].render(f"P: {pts_state['pts']['b']} pt", True, b_col)
-    screen.blit(wlbl, wlbl.get_rect(center=wb_rect.center))
-    screen.blit(blbl, blbl.get_rect(center=bb_rect.center))
+    if my_color != 'spectator':
+        my_pts = pts_state['pts'].get(my_color, 0)
+        formatted_pts = str(int(my_pts)) if my_pts == int(my_pts) else f"{round(my_pts, 2)}"
+        
+        my_pts_rect = pygame.Rect(BOARD_PX - 130, BOARD_PX + 25, 115, 36)
+        draw_rect_aa(screen, (100, 100, 105), my_pts_rect, 6, 1)
+        
+        pts_lbl = fonts['pts'].render(f"Pontos: {formatted_pts}", True, (150, 150, 150))
+        screen.blit(pts_lbl, pts_lbl.get_rect(center=my_pts_rect.center))
 
     if client_state.get('draft_moves'):
         has_real_draft = check_has_real_draft(client_state['draft_moves'])
@@ -1141,8 +1198,35 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
 
     lx, ly = 20, BOARD_PX + 46
     
-    raw_log = gs.get('log', [])
-    clog = gs.get('classified_log', [])
+    raw_log = list(gs.get('log', []))
+    clog = list(gs.get('classified_log', []))
+    
+    if not history_active and client_state.get('draft_moves'):
+        from chess_logic import notation
+        for idx, dm in enumerate(client_state['draft_moves']):
+            if dm.get('type') == 'move':
+                prev_moves = client_state['draft_moves'][:idx]
+                try:
+                    dgs_before = get_draft_state(gs, prev_moves)
+                    sr, sc = dm['fr'], dm['fc']
+                    r, c = dm['tr'], dm['tc']
+                    promo = dm.get('promo')
+                    is_hid = dm.get('hidden', False)
+                    is_fake = dm.get('fakeout', False)
+                    try:
+                        move_not = notation(dgs_before['board'], sr, sc, r, c, dgs_before.get('ep'), promo)
+                    except Exception:
+                        move_not = f"{alg(sc, sr)}->{alg(c, r)}"
+                    prefix = ""
+                    if is_hid:
+                        prefix = "🟦 "
+                    elif is_fake:
+                        prefix = "🟧 "
+                    
+                    raw_log.append({'text': f"{prefix}{move_not}", 'color_type': 'draft_log'})
+                except Exception:
+                    break
+
     start_idx = max(0, len(raw_log) - 3)
     display_entries = []
     
@@ -1150,13 +1234,15 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         entry_raw = raw_log[i]
         c_entry = clog[i] if i < len(clog) else None
         
-        text = str(entry_raw)
-        ct = 'system'
-        
         if c_entry:
             text = c_entry['text']
             ct = c_entry.get('color_type', 'system')
+        elif isinstance(entry_raw, dict):
+            text = entry_raw.get('text', '')
+            ct = entry_raw.get('color_type', 'system')
         else:
+            text = str(entry_raw)
+            ct = 'system'
             parts = text.split('|')
             if len(parts) >= 2:
                 cmd = parts[0]
@@ -1177,37 +1263,93 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
                 elif cmd == 'SYS_FAKEOUT':
                     text = parts[1]
                     ct = 'fakeout'
+                elif cmd == 'PREDICT':
+                    text = parts[1]
+                    ct = 'predict'
                 elif cmd == 'ICE':
                     text = parts[2]
                     ct = 'system'
+                elif cmd == 'LOCAL_WARN':
+                    text = parts[1]
+                    ct = 'local_warn'
         display_entries.append((text, ct))
 
     for i, (text, ct) in enumerate(display_entries):
         a = 255 - (len(display_entries) - 1 - i) * 60
         cl = (a, a, a) # System lines fade into gray
+        
+        # Draw custom colored squares instead of emoji characters to support all fonts/platforms
+        offset_x = 0
+        remaining_text = text
+        if text.startswith("🟦 "):
+            # Blue square
+            rect_y = ly + i * 14 + 2
+            rect_x = lx
+            pygame.draw.rect(screen, (33, 150, 243), (rect_x, rect_y, 10, 10), border_radius=2)
+            offset_x = 16
+            remaining_text = text[2:]
+        elif text.startswith("🟧 "):
+            # Orange square
+            rect_y = ly + i * 14 + 2
+            rect_x = lx
+            pygame.draw.rect(screen, (255, 152, 0), (rect_x, rect_y, 10, 10), border_radius=2)
+            offset_x = 16
+            remaining_text = text[2:]
+
         if ct in ('next_cancelled', ) or "Lance inválido" in text or "Sequência quebrada" in text:
             cl = (229, 115, 115) # Red (#E57373)
-            ls = fonts['small'].render(text, True, cl)
-            screen.blit(ls, (lx, ly + i * 14))
+            ls = fonts['small'].render(remaining_text, True, cl)
+            screen.blit(ls, (lx + offset_x, ly + i * 14))
+        elif ct == 'draft_log':
+            cl = (235, 125, 125) # Light/soft red
+            ls = fonts['small'].render(remaining_text, True, cl)
+            screen.blit(ls, (lx + offset_x, ly + i * 14))
+        elif ct == 'local_warn':
+            cl = (245, 160, 50) # Thematic orange
+            ls = fonts['small'].render(remaining_text, True, cl)
+            screen.blit(ls, (lx + offset_x, ly + i * 14))
+        elif ct == 'predict':
+            cl = (255, 235, 59)
+            ls = fonts['small'].render(remaining_text, True, cl)
+            screen.blit(ls, (lx + offset_x, ly + i * 14))
         elif ct in ('hidden', 'revealed'):
             cl = (100, 181, 246) # Blue (#64B5F6)
-            ls = fonts['small'].render(text, True, cl)
-            screen.blit(ls, (lx, ly + i * 14))
+            ls = fonts['small'].render(remaining_text, True, cl)
+            screen.blit(ls, (lx + offset_x, ly + i * 14))
         elif ct == 'fakeout':
             cl = (255, 183, 77) # Orange (#FFB74D)
-            ls = fonts['small'].render(text, True, cl)
-            screen.blit(ls, (lx, ly + i * 14))
+            ls = fonts['small'].render(remaining_text, True, cl)
+            screen.blit(ls, (lx + offset_x, ly + i * 14))
         elif ct == 'next':
             cl = (255, 213, 79) # Yellow (#FFD54F)
-            ls = fonts['small'].render(text, True, cl)
-            screen.blit(ls, (lx, ly + i * 14))
+            ls = fonts['small'].render(remaining_text, True, cl)
+            screen.blit(ls, (lx + offset_x, ly + i * 14))
         else:
-            ls = fonts['small'].render(text, True, cl)
-            screen.blit(ls, (lx, ly + i * 14))
+            ls = fonts['small'].render(remaining_text, True, cl)
+            screen.blit(ls, (lx + offset_x, ly + i * 14))
 
     by2 = BOARD_PX + 112
     bh = 32
     btns = {}
+
+    def draw_eye_btn(x, w, key, is_enabled, is_active, base_color, hover_color, show_eye, y_override=None):
+        y_pos = y_override if y_override is not None else by2
+        rect = pygame.Rect(x, y_pos, w, bh)
+        is_hover = rect.collidepoint(mouse) and is_enabled
+        if is_hover or is_active:
+            rect.y += 1
+        
+        draw_fancy_btn(screen, "", fonts['ui'], base_color, hover_color, BTN_TXT, rect, is_hover=is_hover, is_disabled=not is_enabled, custom_radius=6)
+        
+        cx, cy = rect.center
+        if show_eye:
+            pygame.draw.ellipse(screen, (200, 200, 200), (cx - 10, cy - 6, 20, 12), 2)
+            pygame.draw.circle(screen, (200, 200, 200), (cx, cy), 3)
+        else:
+            pygame.draw.ellipse(screen, (200, 200, 200), (cx - 10, cy - 6, 20, 12), 2)
+            pygame.draw.circle(screen, (200, 200, 200), (cx, cy), 3)
+            pygame.draw.line(screen, (200, 200, 200), (cx - 12, cy - 8), (cx + 12, cy + 8), 3)
+        btns[key] = rect
 
     def draw_btn(x, w, key, text, is_enabled, is_active, base_color, hover_color, y_override=None):
         y_pos = y_override if y_override is not None else by2
@@ -1235,11 +1377,14 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
         declined = gs.get('rematch_declined')
         opp_left = gs.get('opponent_left')
 
-        if opp_left:
+        if my_color == 'spectator':
+            rem_st = fonts['ui'].render("Partida encerrada.", True, T_DIM)
+            screen.blit(rem_st, (150, by2 + 6))
+        elif opp_left:
             rem_st = fonts['ui'].render("O oponente saiu da sala.", True, T_RED)
             screen.blit(rem_st, (150, by2 + 6))
         elif declined:
-            rem_st = fonts['ui'].render("O oponente recusou a revanche.", True, T_RED)
+            rem_st = fonts['ui'].render("Revanche recusada.", True, T_RED)
             screen.blit(rem_st, (150, by2 + 6))
         elif req_by == my_color:
             rem_st = fonts['ui'].render("Aguardando oponente...", True, T_DIM)
@@ -1251,163 +1396,25 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
             draw_btn(150, 130, 'rematch', 'Pedir Revanche', True, False, BTN_BLUE, BTN_BLUEH)
 
     else:
-        is_confirm = client_state.get('resign_confirm', False)
-        r_txt = "Confirma?" if is_confirm else "Desistir"
-        r_col = (180, 40, 40) if is_confirm else (140, 50, 50)
-        r_hov = (220, 60, 60) if is_confirm else (180, 70, 70)
-        draw_btn(8, 68, 'resign', r_txt, not history_active, is_confirm, r_col, r_hov)
+        if client_state.get('reconnected_game_over') and client_state['waiting']:
+            draw_btn(12, 120, 'menu', 'Voltar ao Menu', True, False, BTN_N, BTN_H)
+        elif my_color == 'spectator':
+            draw_btn(12, 120, 'menu', 'Voltar ao Menu', True, False, BTN_N, BTN_H)
+        elif my_color != 'spectator':
+            is_confirm = client_state.get('resign_confirm', False)
+            r_txt = "Confirma?" if is_confirm else "Desistir"
+            r_col = (180, 40, 40) if is_confirm else (140, 50, 50)
+            r_hov = (220, 60, 60) if is_confirm else (180, 70, 70)
+            draw_btn(8, 68, 'resign', r_txt, not history_active, is_confirm, r_col, r_hov)
+            
+            show_ui = not client_state.get('hide_mechanics_ui', False)
+            draw_eye_btn(8 + 68 + 8, 36, 'toggle_ui', True, False, (70, 70, 75), (90, 90, 95), show_ui)
+        else:
+            # Spectator just has toggle UI button
+            show_ui = not client_state.get('hide_mechanics_ui', False)
+            draw_eye_btn(8, 36, 'toggle_ui', True, False, (70, 70, 75), (90, 90, 95), show_ui)
 
     # Replay button and log buttons removed during mid-game.
-
-    # ------------------ Fila de Plys (Queue of Plys) ------------------
-    ply_y = BOARD_PX + 160
-    ply_h = 42
-
-    container_rect = pygame.Rect(12, ply_y, BOARD_PX - 24, ply_h)
-    draw_rect_aa(screen, (15, 15, 18), container_rect, 6)
-    draw_rect_aa(screen, (40, 40, 45), container_rect, 6, 1)
-
-    # Left arrow button
-    left_btn_rect = pygame.Rect(12, ply_y, 35, ply_h)
-    left_enabled = active_idx > 0 and total_plys > 0
-    left_hover = left_btn_rect.collidepoint(mouse) and left_enabled
-    draw_fancy_btn(screen, "<", fonts['big'], BTN_N, BTN_H, BTN_TXT, left_btn_rect, is_hover=left_hover, is_disabled=not left_enabled, custom_radius=6)
-    btns['left_ply'] = left_btn_rect
-
-    # Right arrow button
-    right_btn_rect = pygame.Rect(BOARD_PX - 12 - 35, ply_y, 35, ply_h)
-    right_enabled = active_idx < total_plys - 1 and total_plys > 0
-    right_hover = right_btn_rect.collidepoint(mouse) and right_enabled
-    draw_fancy_btn(screen, ">", fonts['big'], BTN_N, BTN_H, BTN_TXT, right_btn_rect, is_hover=right_hover, is_disabled=not right_enabled, custom_radius=6)
-    btns['right_ply'] = right_btn_rect
-
-    # Build logical visual queue, allowing for Next blocks
-    draw_blocks = []
-    for i in range(total_plys):
-        draw_blocks.append({'type': 'history', 'idx': i})
-    
-    # If there are Next moves queued from either us or opponent, they appear physically in the queue
-    # with white placeholders.
-    future_moves = []
-    if turn == 'w' and gs.get('next_queue_b'):
-        future_moves = gs['next_queue_b']
-    elif turn == 'b' and gs.get('next_queue_w'):
-        future_moves = gs['next_queue_w']
-        
-    if client_state.get('draft_moves'):
-        future_moves = client_state['draft_moves']
-
-    future_moves = [m for m in future_moves if m.get('type') != 'end_turn']
-
-    next_idx_w = total_plys
-    for fnm in future_moves:
-        draw_blocks.append({'type': 'placeholder', 'idx': next_idx_w})
-        draw_blocks.append({'type': 'next', 'idx': next_idx_w + 1, 'move': fnm})
-        next_idx_w += 2
-
-    if not draw_blocks:
-        empty_lbl = fonts['small'].render("Nenhum lance registrado", True, T_DIM)
-        screen.blit(empty_lbl, empty_lbl.get_rect(center=container_rect.center))
-    else:
-        num_visible = 6
-        total_draws = len(draw_blocks)
-        
-        # Calculate start and end indices
-        if total_draws <= num_visible:
-            start_i = 0
-            end_i = total_draws
-        else:
-            # Show up to active_idx natively, or scroll
-            # If draft mode or next exists, the queue extends to the right
-            start_i = active_idx - num_visible // 2
-            if start_i < 0:
-                start_i = 0
-            end_i = start_i + num_visible
-            if end_i > total_draws:
-                end_i = total_draws
-                start_i = end_i - num_visible
-                
-        # Force scrolling to the end if we're not browsing history and not at the very start
-        if not history_active and total_draws > num_visible:
-            end_i = total_draws
-            start_i = end_i - num_visible
-
-        middle_width = 450
-        block_w = 64
-        block_h = 32
-        gap = 8
-        total_blocks_w = (end_i - start_i) * block_w + (end_i - start_i - 1) * gap
-        middle_offset_x = 12 + 35 + (middle_width - total_blocks_w) // 2 + 8
-
-        for draw_offset in range(end_i - start_i):
-            idx_draw = start_i + draw_offset
-            blk = draw_blocks[idx_draw]
-            real_idx = blk['idx']
-            
-            bx = middle_offset_x + draw_offset * (block_w + gap)
-            by = ply_y + (ply_h - block_h) // 2
-            block_rect = pygame.Rect(bx, by, block_w, block_h)
-
-            col = (42, 42, 48)
-            txt_col = (190, 190, 195)
-            border_color = (52, 52, 58)
-            b_hover = block_rect.collidepoint(mouse)
-            
-            if blk['type'] == 'history':
-                # Check if this ply has a shadow that has disappeared
-                live_gs = turn_hist[-1] if total_plys > 0 else gs
-                live_shadow_history = live_gs.get('shadow_history', {})
-                info = live_shadow_history.get(real_idx)
-                is_revealed_shadow = info is not None and not info.get('active', True)
-
-                if real_idx == 0:
-                    text_label = "Início"
-                else:
-                    p_num = (real_idx + 1) // 2
-                    p_col = "W" if real_idx % 2 != 0 else "B"
-                    if is_revealed_shadow:
-                        s_suffix = " [O]" if info['type'] == 'HIDDEN' else " [F]"
-                        text_label = f"{p_num}.{p_col}{s_suffix}"
-                    else:
-                        text_label = f"{p_num}.{p_col}"
-
-                is_active_block = (real_idx == active_idx)
-                is_present_block = (real_idx == total_plys - 1)
-
-                if is_active_block:
-                    col = (120, 120, 120) if b_hover else (90, 90, 90)
-                    txt_col = (255, 255, 255)
-                    border_color = (160, 160, 160)
-                elif is_present_block:
-                    col = (45, 50, 48) if b_hover else (32, 36, 34)
-                    txt_col = (110, 220, 110)
-                    border_color = (60, 150, 75)
-                else:
-                    col = (42, 42, 48) if b_hover else (28, 28, 34)
-                    txt_col = (190, 190, 195)
-                    border_color = (52, 52, 58)
-            elif blk['type'] == 'placeholder':
-                p_num = (real_idx + 1) // 2
-                p_col = "W" if real_idx % 2 != 0 else "B"
-                text_label = f"{p_num}.{p_col}"
-                col = (255, 255, 255) if b_hover else (240, 240, 240)
-                txt_col = (50, 50, 50)
-                border_color = (200, 200, 200)
-            elif blk['type'] == 'next':
-                p_num = (real_idx + 1) // 2
-                p_col = "W" if real_idx % 2 != 0 else "B"
-                text_label = f"{p_num}.{p_col}"
-                col = (200, 60, 60) if b_hover else (170, 40, 40)
-                txt_col = (255, 255, 255)
-                border_color = (220, 80, 80)
-
-            draw_rect_aa(screen, col, block_rect, 5)
-            draw_rect_aa(screen, border_color, block_rect, 5, 1)
-
-            block_txt = fonts['small'].render(text_label, True, txt_col)
-            screen.blit(block_txt, block_txt.get_rect(center=block_rect.center))
-
-            btns[f'ply_block_{real_idx}'] = block_rect
 
     return btns
 
@@ -1432,7 +1439,13 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
     if not client_state.get('is_dragging_gesture'):
         return gs
 
-    sr, sc = client_state['drag_piece_sq']
+    # drag_piece_sq is the clicked square (might be pub_pos)
+    # selected is the true square resolved by get_ui_selection
+    dsr, dsc = client_state['drag_piece_sq']
+    if client_state.get('selected'):
+        sr, sc = client_state['selected']
+    else:
+        sr, sc = dsr, dsc
     
     if mx < BOARD_PX and my < BOARD_PX:
         cc2 = mx // SQ
@@ -1440,7 +1453,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
         r = 7 - rr2 if client_state['flipped'] else rr2
         c = 7 - cc2 if client_state['flipped'] else cc2
         
-        if (r, c) == (sr, sc):
+        if (r, c) == (dsr, dsc):
             # ... existing source click logic ...
             client_state['selected'] = None
             client_state['legal_sq'] = []
@@ -1449,6 +1462,11 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                 await MechanicsManager.execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound, None)
             elif client_state.get('hidden_triggered'):
                 await MechanicsManager.execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound, None)
+            else:
+                if gs.get('fakeout_active') or client_state.get('draft_fakeout'):
+                    await MechanicsManager.execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound, None)
+                elif gs.get('hidden_mode') or client_state.get('draft_hidden'):
+                    await MechanicsManager.execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound, None)
             client_state['hidden_triggered'] = False
             client_state['fakeout_triggered'] = False
             return gs
@@ -1460,7 +1478,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
             p_king = tb_k[sr][sc]
             p_target = tb_k[r][c]
             
-            if p_king and pt(p_king) == 'K' and p_target and pc(p_target) == gs['turn'] and pt(p_target) != 'K':
+            if p_king and pt(p_king) == 'K' and pc(p_king) == gs['turn'] and p_target and pc(p_target) == gs['turn'] and pt(p_target) != 'K':
                 # Interaction returns 'frozen', 'unfrozen' or None
                 res = ice_king_interaction(gs, sr, sc, r, c)
                 if res:
@@ -1480,20 +1498,102 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                     client_state['legal_sq'] = []
                     client_state['hidden_triggered'] = False
                     client_state['fakeout_triggered'] = False
+                    if gs.get('fakeout_active') or client_state.get('draft_fakeout'):
+                        gs['fakeout_active'] = False
+                        client_state['draft_fakeout'] = False
+                    elif gs.get('hidden_mode') or client_state.get('draft_hidden'):
+                        gs['hidden_mode'] = False
+                        client_state['draft_hidden'] = False
                     return gs
         # --- END ICE KING CHECK ---
+        
+        if client_state.get('predicting_mode'):
+            if (r, c) in client_state['legal_sq']:
+                sr, sc = client_state.get('drag_piece_sq', client_state.get('selected', (0, 0)))
+                gs_temp = copy.deepcopy(gs)
+                gs_temp['turn'] = 'b' if gs['turn'] == 'w' else 'w'
+                tb_temp = get_true_board(gs_temp, gs_temp['turn'])
+                p_target = tb_temp[r][c]
+                p_dragged = tb_temp[sr][sc]
+                is_casca_drag = p_dragged is None
+                if is_casca_drag:
+                    my_hidden = gs_temp["hidden_w"] if gs_temp["turn"] == "w" else gs_temp["hidden_b"]
+                    for val in my_hidden.values():
+                        if val.pub_pos == (sr, sc):
+                            p_dragged = val.piece
+                            break
+                            
+                promo = None
+                if p_dragged and pt(p_dragged) == 'P' and r in (0, 7):
+                    promo = await ask_promo(screen, fonts, gs_temp['turn'], websocket, client_state)
+
+                if is_local:
+                    dm_copy = client_state.get('draft_moves', [])
+                    if dm_copy:
+                        q_key_sq = f'next_queue_{gs["turn"]}'
+                        gs[q_key_sq] = copy.deepcopy(dm_copy)
+                    if register_predict_move(gs, gs['turn'], sr, sc, r, c, promo, cost=0.2):
+                        client_state['predict_cost_total'] = round(client_state.get('predict_cost_total', 0.0) + 0.2, 2)
+                        play_sound('capture' if p_target is not None else 'move')
+                    else:
+                        play_sound('error')
+                        gs['log'].append({'text': 'Pontuação insuficiente', 'color_type': 'predict'})
+                        trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+                else:
+                    if gs['pts'][gs['turn']] >= 0.2:
+                        play_sound('capture' if p_target is not None else 'move')
+                        await websocket.send(json.dumps({
+                            'type': 'action',
+                            'action': 'predict_move',
+                            'fr': sr,
+                            'fc': sc,
+                            'tr': r,
+                            'tc': c,
+                            'promo': promo
+                        }))
+                    else:
+                        play_sound('error')
+                        gs['log'].append({'text': 'Pontuação insuficiente', 'color_type': 'predict'})
+                        trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+            else:
+                play_sound('error')
+                trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+                
+            client_state['selected'] = None
+            client_state['legal_sq'] = []
+            client_state['is_dragging_gesture'] = False
+            return gs
 
         if (r, c) in client_state['legal_sq']:
-            # Release on valid target concludes the move!
-            promo = None
             curr_dgs = get_draft_state(gs, client_state.get('draft_moves', [])) if client_state.get('drafting') else gs
             tb = get_true_board(curr_dgs, gs['turn'])
             p = tb[sr][sc]
+            is_casca_drag = p is None
+            if is_casca_drag:
+                my_hidden = curr_dgs["hidden_w"] if gs["turn"] == "w" else curr_dgs["hidden_b"]
+                for val in my_hidden.values():
+                    if val.pub_pos == (sr, sc):
+                        p = val.piece
+                        break
+            is_fakeout_active_now = client_state.get('draft_fakeout', False) if client_state.get('drafting') else gs.get('fakeout_active', False)
+            if is_casca_drag and not is_fakeout_active_now:
+                play_sound('error')
+                trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+                client_state['selected'] = None
+                client_state['legal_sq'] = []
+                client_state['is_dragging_gesture'] = False
+                return gs
+                
+            # Release on valid target concludes the move!
+            promo = None
             if p and pt(p) == 'P' and r in (0, 7):
                 promo = await ask_promo(screen, fonts, gs['turn'], websocket, client_state)
 
-            if client_state.get('drafting'):
-                is_hidden_move = client_state.get('draft_hidden', False) or client_state.get('hidden_triggered', False)
+            is_auto_draft = not client_state.get('drafting') and gs.get('hidden_count', 0) > 0 and not (gs.get('fakeout_active', False) or client_state.get('fakeout_triggered', False))
+            if client_state.get('drafting') or is_auto_draft:
+                if is_auto_draft:
+                    client_state['drafting'] = True
+                is_hidden_move = client_state.get('draft_hidden', False) or client_state.get('hidden_triggered', False) or gs.get('hidden_mode', False)
             else:
                 is_hidden_move = gs.get('hidden_mode', False) or client_state.get('hidden_triggered', False)
 
@@ -1504,18 +1604,39 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                 dgs['hidden_mode'] = is_hidden_move
                 legals = legal(dgs, sr, sc)
                 if (r, c) in legals:
+                    is_fake = client_state.get('draft_fakeout', False)
                     d_moves.append({
                         'type': 'move',
                         'fr': sr, 'fc': sc, 'tr': r, 'tc': c,
                         'hidden': is_hidden_move,
-                        'fakeout': client_state.get('draft_fakeout', False),
+                        'fakeout': is_fake,
                         'promo': promo,
                         'drafted_turn': (gs['turn_count'] + 1) // 2
                     })
                     client_state['draft_moves'] = d_moves
+                    
                     play_sound('next_move')
                     client_state['draft_hidden'] = False
                     client_state['draft_fakeout'] = False
+                    if gs.get('hidden_mode', False) and not is_local:
+                        await websocket.send(json.dumps({"type": "action", "action": "toggle_hidden"}))
+                    if gs.get('fakeout_active', False) and not is_local:
+                        await websocket.send(json.dumps({"type": "action", "action": "toggle_fakeout"}))
+                    gs['hidden_mode'] = False
+                    gs['fakeout_active'] = False
+                    client_state['fill_fade_timer'] = 1.0
+                    col = (245, 120, 20) if is_fake else ((30, 110, 255) if is_hidden_move else (239, 68, 68))
+                    sqs = [(r, c, col, 255, False)]
+                    dr, dc = r - sr, c - sc
+                    steps = max(abs(dr), abs(dc))
+                    if steps > 0:
+                        alpha = 127
+                        for i in range(steps - 1, 0, -1):
+                            sq_r = sr + int(i * dr / steps)
+                            sq_c = sc + int(i * dc / steps)
+                            sqs.append((sq_r, sq_c, col, alpha, False))
+                            alpha = max(10, alpha // 2)
+                    client_state['fade_squares'] = sqs
                 client_state['selected'] = None
                 client_state['legal_sq'] = []
             else:
@@ -1566,7 +1687,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                                     p_anim = target_val.piece if hasattr(target_val, 'piece') else target_val[1]
                                     break
                         if p_anim:
-                            trigger_piece_anim(client_state, p_anim, nfr, nfc, ntr, ntc, is_hidden_move, gs.get('fakeout_active', False), is_capture)
+                            trigger_piece_anim(client_state, p_anim, nfr, nfc, ntr, ntc, is_hidden_move, gs.get('fakeout_used', False) or gs.get('fakeout_active', False), is_capture)
                         
                         is_fakeout = gs.get('fakeout_used', False)
                         is_shadow = gs.get('hidden_count', 0) > 0
@@ -1647,6 +1768,8 @@ async def connect_and_join(uri, action, room_code=None, token=None):
             await ws.send(json.dumps({"type": "create_room"}))
         elif action == "join_room":
             await ws.send(json.dumps({"type": "join_room", "room": room_code, "session_token": token}))
+        elif action == "spectate_room":
+            await ws.send(json.dumps({"type": "spectate_room", "room": room_code, "session_token": token}))
         return ws
     except Exception as e:
         import traceback
@@ -1727,12 +1850,13 @@ async def game_loop():
     websocket = None
     clock = pygame.time.Clock()
 
-    menu_y_start = (WIN_H // 2) - 100
+    menu_y_start = (WIN_H // 2) - 140
     btn_create = pygame.Rect(WIN_W // 2 - 100, menu_y_start, 200, 50)
-    btn_join = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 70, 200, 50)
-    btn_local = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 140, 200, 50)
-    btn_test = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 210, 200, 50)
-    btn_replays = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 280, 200, 50)
+    btn_join = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 65, 200, 50)
+    btn_spectate = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 130, 200, 50)
+    btn_local = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 195, 200, 50)
+    btn_test = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 260, 200, 50)
+    btn_replays = pygame.Rect(WIN_W // 2 - 100, menu_y_start + 325, 200, 50)
 
     def start_local_game(is_test=False):
         nonlocal gs, client_state, app_state
@@ -1774,8 +1898,9 @@ async def game_loop():
         await asyncio.sleep(0) # yield control so websocket background task won't drop pong packets
         
         if client_state.get('is_dragging_gesture'):
-            client_state['gesture_timer'] = client_state.get('gesture_timer', 0.0) + dt
-            if not client_state.get('hidden_triggered'):
+            if not client_state.get('predicting_mode'):
+                client_state['gesture_timer'] = client_state.get('gesture_timer', 0.0) + dt
+            if not client_state.get('predicting_mode') and not client_state.get('hidden_triggered') and not client_state.get('fakeout_triggered'):
                  if client_state['gesture_timer'] >= 2.0:
                     if MechanicsManager.can_toggle_hidden(gs, client_state):
                         client_state['hidden_triggered'] = True
@@ -1801,9 +1926,10 @@ async def game_loop():
                         if not MechanicsManager.can_toggle_fakeout(gs, client_state):
                             client_state['gesture_timer'] = 2.0
 
-            if client_state['gesture_timer'] >= 6.0 and not client_state.get('fakeout_triggered'):
+            if not client_state.get('predicting_mode') and client_state['gesture_timer'] >= 4.5 and not client_state.get('fakeout_triggered'):
                 if MechanicsManager.can_toggle_fakeout(gs, client_state):
                     client_state['fakeout_triggered'] = True
+                    client_state['hidden_triggered'] = False
                     # Trigger fakeout logic (async)
                     mx, my = client_state.get('drag_pos', (0,0))
                     await MechanicsManager.execute_toggle_fakeout(gs, client_state, client_state.get('is_local', False), websocket, play_sound, None, click_pos=(mx, my), force_shockwave=True)
@@ -1822,7 +1948,10 @@ async def game_loop():
                     else:
                         client_state['legal_sq'] = []
                 else:
-                    client_state['gesture_timer'] = 6.0
+                    client_state['gesture_timer'] = 4.5
+
+        if 'fill_fade_timer' in client_state and client_state['fill_fade_timer'] > 0:
+            client_state['fill_fade_timer'] = max(0.0, client_state['fill_fade_timer'] - dt)
 
         if client_state.get('anim'):
             client_state['anim']['t'] += dt
@@ -1871,7 +2000,29 @@ async def game_loop():
                 else:
                     spawn_particles(end_x, end_y, (180, 170, 160), 12, client_state, size=3, speed=100, life=0.25)
                 
+                a = client_state['anim']
                 client_state['anim'] = None
+                if a.get('color') == client_state.get('my_color'):
+                    client_state['fill_fade_timer'] = 1.0
+                    
+                    sqs = []
+                    # Path fading
+                    fr, fc, tr, tc = a['fr'], a['fc'], a['tr'], a['tc']
+                    is_h = a.get('is_hidden')
+                    is_f = a.get('is_fakeout')
+                    col = (245, 120, 20) if is_f else ((30, 110, 255) if is_h else (239, 68, 68))
+                    
+                    # compute path ALWAYS for all move types
+                    dr = tr - fr
+                    dc = tc - fc
+                    steps = max(abs(dr), abs(dc))
+                    if steps > 0:
+                        for i in range(1, steps + 1):
+                            r = fr + int(i * dr / steps)
+                            c = fc + int(i * dc / steps)
+                            alpha = int(25 + 95 * (i / steps))
+                            sqs.append((r, c, col, alpha, False))
+                    client_state['fade_squares'] = sqs
 
         if client_state.get('particles'):
             for p in client_state['particles']:
@@ -1920,14 +2071,20 @@ async def game_loop():
         if client_state.get('conn_task'):
             t = client_state['conn_task']
             if t.done():
-                res = t.result()
-                client_state['conn_task'] = None
-                if isinstance(res, Exception):
-                    error_msg = f"Falha na conexão. Tente novamente."
+                try:
+                    res = t.result()
+                    client_state['conn_task'] = None
+                    if isinstance(res, Exception):
+                        error_msg = f"Falha na conexão. Tente novamente."
+                        app_state = "MENU"
+                        websocket = None
+                    else:
+                        websocket = res
+                except Exception as e:
+                    client_state['conn_task'] = None
+                    error_msg = f"Falha na conexão: {e}"
                     app_state = "MENU"
                     websocket = None
-                else:
-                    websocket = res
 
         # A. Websocket message parsing (multiplayer only)
         if websocket is not None and not client_state.get('is_local', False):
@@ -1951,8 +2108,10 @@ async def game_loop():
                     client_state['flipped'] = (data['color'] == 'b')
                     save_session(data['room'], data.get('session_token'))
                     if data.get('reconnected'):
-                        app_state = "GAME"
+                        app_state = "PLAYING"
                         client_state['waiting'] = True # Will be cleared by state_update
+                        if data.get('game_over'):
+                            client_state['reconnected_game_over'] = True
                     else:
                         app_state = "LOBBY"
 
@@ -1962,8 +2121,9 @@ async def game_loop():
                     
                     if new_gs.get('game_over') and not gs.get('game_over'):
                         play_sound('game_over')
-                    elif gs.get('last_move') != new_gs.get('last_move') and new_gs.get('last_move') or len(new_gs.get('log', [])) > len(gs.get('log', [])) or gs.get('turn') != new_gs.get('turn'):
-                        fr, fc, tr, tc = new_gs.get('last_move', (None, None, None, None))
+                    elif (gs.get('last_move') != new_gs.get('last_move') and new_gs.get('last_move')) or len(new_gs.get('log', [])) != len(gs.get('log', [])):
+                        lm = new_gs.get('last_move')
+                        fr, fc, tr, tc = lm if lm else (None, None, None, None)
                         
                         # Detect any captured piece on destination square before the move
                         has_captured_piece_on_square = False
@@ -2098,8 +2258,11 @@ async def game_loop():
                         if app_state != "PLAYING":
                             play_sound('start')
                         app_state = "PLAYING"
-                        pygame.display.set_caption(
-                            f"Hidden Chess - Jogando de {'Brancas' if client_state['my_color'] == 'w' else 'Pretas'} (Sala: {client_state['room_code']})")
+                        if client_state['my_color'] == 'spectator':
+                            pygame.display.set_caption(f"Hidden Chess - Espectador (Sala: {client_state['room_code']})")
+                        else:
+                            pygame.display.set_caption(
+                                f"Hidden Chess - Jogando de {'Brancas' if client_state['my_color'] == 'w' else 'Pretas'} (Sala: {client_state['room_code']})")
                     else:
                         app_state = "LOBBY"
                         client_state['fakeout_mode_enabled'] = gs.get('fakeout_mode_enabled', True)
@@ -2168,6 +2331,15 @@ async def game_loop():
                     elif btn_join.collidepoint((mx, my)):
                         play_sound('click')
                         app_state = "JOINING"
+                        client_state['is_spectating_attempt'] = False
+                        session_data = load_session()
+                        input_text = session_data.get('room_code', "") if session_data else ""
+                        error_msg = ""
+                        
+                    elif btn_spectate.collidepoint((mx, my)):
+                        play_sound('click')
+                        app_state = "JOINING"
+                        client_state['is_spectating_attempt'] = True
                         session_data = load_session()
                         input_text = session_data.get('room_code', "") if session_data else ""
                         error_msg = ""
@@ -2210,7 +2382,8 @@ async def game_loop():
                                 session_data = load_session()
                                 if session_data and session_data.get('room_code') == input_text:
                                     token = session_data.get('session_token')
-                                client_state['conn_task'] = asyncio.create_task(connect_and_join(uri, "join_room", input_text, token))
+                                action_type = "spectate_room" if client_state.get('is_spectating_attempt') else "join_room"
+                                client_state['conn_task'] = asyncio.create_task(connect_and_join(uri, action_type, input_text, token))
                             except Exception as e:
                                 error_msg = f"Falha ao conectar."
                                 app_state = "MENU"
@@ -2290,25 +2463,9 @@ async def game_loop():
                     mx, my = ev.pos
                     if mx < BOARD_PX and BOARD_PX <= my < BOARD_PX + PANEL_H:
                         btns = client_state['panel_btns']
-                        if btns.get('left_ply') and btns['left_ply'].collidepoint((mx, my)):
-                            idx = client_state.get('history_index', 0)
-                            if idx > 0:
-                                client_state['history_index'] = idx - 1
-                                play_sound('select')
-                        elif btns.get('right_ply') and btns['right_ply'].collidepoint((mx, my)):
-                            idx = client_state.get('history_index', 0)
-                            if idx < len(client_state.get('turn_history', [])) - 1:
-                                client_state['history_index'] = idx + 1
-                                play_sound('select')
-                        elif btns.get('exit_replay') and btns['exit_replay'].collidepoint((mx, my)):
+                        if btns.get('exit_replay') and btns['exit_replay'].collidepoint((mx, my)):
                             play_sound('click')
                             app_state = "REPLAY_LIST"
-                        else:
-                            for key, b_rect in btns.items():
-                                if key.startswith('ply_block_') and b_rect.collidepoint((mx, my)):
-                                    target_idx = int(key.split('_')[-1])
-                                    client_state['history_index'] = target_idx
-                                    play_sound('select')
 
             elif app_state == "LOBBY":
                 if ev.type == pygame.MOUSEBUTTONDOWN:
@@ -2368,51 +2525,32 @@ async def game_loop():
                     if ev.button in (4, 5):
                         continue
 
-                    if client_state['waiting']: continue
+                    if client_state['waiting']:
+                        allow_menu = False
+                        btns = client_state.get('panel_btns', {})
+                        if btns.get('menu') and btns['menu'].collidepoint((mx, my)):
+                            allow_menu = True
+                        if not allow_menu:
+                            continue
 
                     if mx < BOARD_PX and BOARD_PX <= my < BOARD_PX + PANEL_H:
                         btns = client_state['panel_btns']
 
-                        if btns.get('left_ply') and btns['left_ply'].collidepoint((mx, my)):
-                            idx = client_state.get('history_index', 0)
-                            if idx > 0:
-                                client_state['history_index'] = idx - 1
-                                client_state['selected'] = None
-                                client_state['legal_sq'] = []
+                        if btns.get('menu') and btns['menu'].collidepoint((mx, my)):
+                            if is_local:
+                                app_state = "MENU"
+                                client_state['room_code'] = None
+                            else:
+                                await websocket.send(json.dumps({"type": "leave_room"}))
+                                if websocket:
+                                    await websocket.close()
+                                    websocket = None
+                                app_state = "MENU"
+                                client_state['room_code'] = None
                             continue
-                        elif btns.get('right_ply') and btns['right_ply'].collidepoint((mx, my)):
-                            idx = client_state.get('history_index', 0)
-                            if idx < len(client_state.get('turn_history', [])) - 1:
-                                client_state['history_index'] = idx + 1
-                                client_state['selected'] = None
-                                client_state['legal_sq'] = []
-                            continue
-                        else:
-                            ply_hit = False
-                            for key, b_rect in btns.items():
-                                if key.startswith('ply_block_') and b_rect.collidepoint((mx, my)):
-                                    target_idx = int(key.split('_')[-1])
-                                    client_state['history_index'] = target_idx
-                                    client_state['selected'] = None
-                                    client_state['legal_sq'] = []
-                                    ply_hit = True
-                                    break
-                            if ply_hit:
-                                continue
-
-                        if gs['game_over']:
-                            if btns.get('menu') and btns['menu'].collidepoint((mx, my)):
-                                if is_local:
-                                    app_state = "MENU"
-                                    client_state['room_code'] = None
-                                else:
-                                    await websocket.send(json.dumps({"type": "leave_room"}))
-                                    if websocket:
-                                        await websocket.close()
-                                        websocket = None
-                                    app_state = "MENU"
-                                    client_state['room_code'] = None
-                            elif btns.get('rematch') and btns['rematch'].collidepoint((mx, my)):
+                            
+                        if gs['game_over'] or (client_state.get('reconnected_game_over') and client_state.get('waiting')):
+                            if btns.get('rematch') and btns['rematch'].collidepoint((mx, my)):
                                 if is_local:
                                     is_test_mode = client_state.get('is_test', False)
                                     start_local_game(is_test=is_test_mode)
@@ -2452,6 +2590,11 @@ async def game_loop():
 
                         pass
                         
+                        if btns.get('toggle_ui') and btns['toggle_ui'].collidepoint((mx, my)):
+                            client_state['hide_mechanics_ui'] = not client_state.get('hide_mechanics_ui', False)
+                            play_sound('select')
+                            continue
+
                         if btns.get('resign') and btns['resign'].collidepoint((mx, my)):
                             if not client_state.get('resign_confirm'):
                                 client_state['resign_confirm'] = True
@@ -2517,6 +2660,14 @@ async def game_loop():
                                 if dm_copy and dm_copy[-1].get('type') != 'end_turn':
                                     dm_copy.append({'type': 'end_turn'})
                                     
+                                if dm:
+                                    client_state['predict_cost_total'] = 0.0
+                                else:
+                                    refund = client_state.get('predict_cost_total', 0.0)
+                                    if refund > 0:
+                                        gs['pts'][active_color] = round(gs['pts'][active_color] + refund, 2)
+                                    client_state['predict_cost_total'] = 0.0
+                                    
                                 if is_local:
                                     q_key_sq = f'next_queue_{gs["turn"]}'
                                     if gs['normal_done'] or gs['hidden_count'] > 0 or gs.get(q_key_sq):
@@ -2526,9 +2677,9 @@ async def game_loop():
                                             next_a = get_next_turn_from_queue(gs, gs['turn'])
                                             if next_a:
                                                 if compare_turns(gs.get('current_turn_actions', []), next_a):
-                                                    gs['pts'][gs['turn']] += 1
+                                                    gs['pts'][gs['turn']] = round(gs['pts'][gs['turn']] + 1, 2)
                                                 else:
-                                                    gs['pts'][gs['turn']] -= 1
+                                                    gs['pts'][gs['turn']] = round(gs['pts'][gs['turn']] - 1, 2)
                                                 pop_next_turn_from_queue(gs, gs['turn'])
 
                                             if dm_copy and dm:
@@ -2572,7 +2723,8 @@ async def game_loop():
                         if client_state.get('history_active', False): continue
                         if gs['turn'] != active_color: continue
                         if not gs.get('fakeout_active', False):
-                            if (gs['normal_done'] or gs.get('hidden_count', 0) > 0) and not client_state.get('drafting'): continue
+                            can_fakeout = gs.get('hidden_count', 0) == 1 and gs.get('fakeout_count', 0) == 0 and not gs.get('fakeout_used', False)
+                            if (gs['normal_done'] or (gs.get('hidden_count', 0) > 0 and not can_fakeout)) and not client_state.get('drafting'): continue
                             if gs['hidden_mode'] and not can_afford(gs): continue
 
                         cc2 = mx // SQ
@@ -2581,13 +2733,49 @@ async def game_loop():
                         c = 7 - cc2 if client_state['flipped'] else cc2
                         curr_dgs = get_draft_state(gs, client_state.get('draft_moves', [])) if client_state.get('drafting') else gs
                         tb = get_true_board(curr_dgs, gs['turn'])
-
                         p_on_sq = tb[r][c]
-                        if p_on_sq is not None and pc(p_on_sq) == gs['turn']:
+                        is_my_casca = False
+                        my_hidden = curr_dgs["hidden_w"] if gs["turn"] == "w" else curr_dgs["hidden_b"]
+                        for val in my_hidden.values():
+                            if val.pub_pos == (r, c):
+                                is_my_casca = True
+                                p_on_sq = val.piece
+                                break
+
+                        is_opponent = p_on_sq is not None and pc(p_on_sq) != gs["turn"]
+                        
+                        if is_opponent and (client_state.get('drafting') or gs['normal_done']):
+                            gs_temp = copy.deepcopy(gs)
+                            gs_temp['turn'] = 'b' if gs['turn'] == 'w' else 'w'
+                            gs_temp['hidden_mode'] = False
+                            gs_temp['fakeout_active'] = False
+                            legs = legal(gs_temp, r, c)
+                            if legs is not None:
+                                client_state['predicting_mode'] = True
+                                client_state['selected'] = (r, c)
+                                client_state['legal_sq'] = legs
+                                play_sound('select')
+                                client_state['is_dragging_gesture'] = True
+                                client_state['drag_piece_sq'] = (r, c)
+                                client_state['drag_piece_name'] = p_on_sq
+                                client_state['drag_pos'] = (mx, my)
+                                client_state['gesture_timer'] = 0.0
+                                client_state['hidden_triggered'] = False
+                                client_state['fakeout_triggered'] = False
+                            continue
+
+                        if (p_on_sq is not None and pc(p_on_sq) == gs["turn"]) or is_my_casca:
                             if client_state.get('selected') == (r, c):
                                 client_state['selected'] = None
                                 client_state['legal_sq'] = []
-                                play_sound('select')
+                                if gs.get('hidden_mode'):
+                                    gs['hidden_mode'] = False
+                                    play_sound('hidden_off')
+                                elif client_state.get('draft_hidden'):
+                                    client_state['draft_hidden'] = False
+                                    play_sound('hidden_off')
+                                else:
+                                    play_sound('select')
                                 continue
                             gs_temp = copy.copy(gs)
                             gs_temp['drafting_active'] = client_state.get('drafting', False)
@@ -2596,6 +2784,7 @@ async def game_loop():
                                 gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
                             sel, legs = get_ui_selection(gs_temp, r, c, draft_moves=client_state.get('draft_moves', []))
                             if sel is not None:
+                                client_state['predicting_mode'] = False
                                 client_state['selected'] = sel
                                 client_state['legal_sq'] = legs
                                 play_sound('select')
@@ -2613,7 +2802,7 @@ async def game_loop():
                             target_p = tb[r][c]
                             
                             # --- ICE KING CHECK (Standard) ---
-                            if target_p and pt(tb[sr][sc]) == 'K' and pc(target_p) == gs['turn'] and pt(target_p) != 'K':
+                            if target_p and pt(tb[sr][sc]) == 'K' and pc(tb[sr][sc]) == gs['turn'] and pc(target_p) == gs['turn'] and pt(target_p) != 'K':
                                 res = ice_king_interaction(gs, sr, sc, r, c)
                                 if res:
                                     if res == 'frozen':
@@ -2629,16 +2818,90 @@ async def game_loop():
                                     
                                     client_state['selected'] = None
                                     client_state['legal_sq'] = []
+                                    if gs.get('fakeout_active') or client_state.get('draft_fakeout'):
+                                        gs['fakeout_active'] = False
+                                        client_state['draft_fakeout'] = False
+                                    elif gs.get('hidden_mode') or client_state.get('draft_hidden'):
+                                        gs['hidden_mode'] = False
+                                        client_state['draft_hidden'] = False
                                     continue
                             # --- END ICE KING CHECK ---
 
-                            if target_p and pt(tb[sr][sc]) == 'K' and pt(target_p) == 'R' and pc(
+                            if target_p and pt(tb[sr][sc]) == 'K' and pc(tb[sr][sc]) == gs['turn'] and pt(target_p) == 'R' and pc(
                                     target_p) == gs['turn']:
                                 c = 6 if c == 7 else 2
+
+                        if client_state.get('predicting_mode'):
+                            if (r, c) in client_state['legal_sq']:
+                                sr, sc = client_state['selected']
+                                gs_temp = copy.deepcopy(gs)
+                                gs_temp['turn'] = 'b' if gs['turn'] == 'w' else 'w'
+                                tb_temp = get_true_board(gs_temp, gs_temp['turn'])
+                                p_target = tb_temp[r][c]
+                                p_selected = tb_temp[sr][sc]
+                                is_casca = p_selected is None
+                                if is_casca:
+                                    my_hidden = gs_temp["hidden_w"] if gs_temp["turn"] == "w" else gs_temp["hidden_b"]
+                                    for val in my_hidden.values():
+                                        if val.pub_pos == (sr, sc):
+                                            p_selected = val.piece
+                                            break
+
+                                promo = None
+                                if p_selected and pt(p_selected) == 'P' and r in (0, 7):
+                                    promo = await ask_promo(screen, fonts, gs_temp['turn'], websocket, client_state)
+
+                                if is_local:
+                                    if register_predict_move(gs, gs['turn'], sr, sc, r, c, promo, cost=0.2):
+                                        client_state['predict_cost_total'] = round(client_state.get('predict_cost_total', 0.0) + 0.2, 2)
+                                        play_sound('capture' if p_target is not None else 'move')
+                                    else:
+                                        play_sound('error')
+                                        gs['log'].append({'text': 'Pontuação insuficiente', 'color_type': 'predict'})
+                                        trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+                                else:
+                                    if gs['pts'][gs['turn']] >= 0.2:
+                                        play_sound('capture' if p_target is not None else 'move')
+                                        payload = {
+                                            'type': 'action',
+                                            'action': 'predict_move',
+                                            'fr': sr,
+                                            'fc': sc,
+                                            'tr': r,
+                                            'tc': c,
+                                            'promo': promo
+                                        }
+                                        if client_state.get('draft_moves'):
+                                            payload['draft_moves'] = client_state['draft_moves']
+                                        await websocket.send(json.dumps(payload))
+                                    else:
+                                        play_sound('error')
+                                        gs['log'].append({'text': 'Pontuação insuficiente', 'color_type': 'predict'})
+                                        trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+                            else:
+                                play_sound('error')
+                                trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+                                
+                            client_state['selected'] = None
+                            client_state['legal_sq'] = []
+                            continue
 
                         if client_state['selected']:
                             if (r, c) in client_state['legal_sq']:
                                 sr, sc = client_state['selected']
+                                curr_dgs_click = get_draft_state(gs, client_state.get('draft_moves', [])) if client_state.get('drafting') else gs
+                                tb_click = get_true_board(curr_dgs_click, gs['turn'])
+                                p_click = tb_click[sr][sc]
+                                is_casca_drag = p_click is None
+                                is_fakeout_active_now = client_state.get('draft_fakeout', False) if client_state.get('drafting') else gs.get('fakeout_active', False)
+                                
+                                if is_casca_drag and not is_fakeout_active_now:
+                                    play_sound('error')
+                                    trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
+                                    client_state['selected'] = None
+                                    client_state['legal_sq'] = []
+                                    continue
+
                                 conflict = check_conflict(gs, sr, sc, r, c)
                                 if conflict:
                                     if is_local:
@@ -2708,17 +2971,27 @@ async def game_loop():
                                 else:
                                     promo = None
                                     p = tb[sr][sc]
-                                    if pt(p) == 'P' and r in (0, 7):
+                                    if p is None:
+                                        my_hid = curr_dgs_click["hidden_w"] if gs["turn"] == "w" else curr_dgs_click["hidden_b"]
+                                        for val in my_hid.values():
+                                            if val.pub_pos == (sr, sc):
+                                                p = val.piece
+                                                break
+                                    if p and pt(p) == "P" and r in (0, 7):
                                         promo = await ask_promo(screen, fonts, active_color, websocket, client_state)
 
-                                    if client_state.get('drafting'):
+                                    is_auto_draft = not client_state.get('drafting') and gs.get('hidden_count', 0) > 0 and not (gs.get('fakeout_active', False) or client_state.get('fakeout_triggered', False))
+                                    if client_state.get('drafting') or is_auto_draft:
+                                        if is_auto_draft:
+                                            client_state['drafting'] = True
                                         d_moves = client_state.get('draft_moves', [])
                                         dgs = get_draft_state(gs, d_moves)
-                                        dgs['fakeout_active'] = client_state.get('draft_fakeout', False)
-                                        dgs['hidden_mode'] = client_state.get('draft_hidden', False)
+                                        is_fake = client_state.get('draft_fakeout', False) or gs.get('fakeout_active', False)
+                                        is_hid = client_state.get('draft_hidden', False) or gs.get('hidden_mode', False)
+                                        dgs['fakeout_active'] = is_fake
+                                        dgs['hidden_mode'] = is_hid
                                         legals = legal(dgs, sr, sc)
                                         if (r, c) in legals:
-                                            is_hid = client_state.get('draft_hidden', False)
                                             is_fake = client_state.get('draft_fakeout', False)
                                             d_moves.append({
                                                 'type': 'move',
@@ -2729,9 +3002,33 @@ async def game_loop():
                                                 'drafted_turn': (gs['turn_count'] + 1) // 2
                                             })
                                             client_state['draft_moves'] = d_moves
+                                            
                                             play_sound('next_move')
                                             client_state['draft_hidden'] = False
                                             client_state['draft_fakeout'] = False
+                                            if gs.get('hidden_mode', False) and not is_local:
+                                                await websocket.send(json.dumps({"type": "action", "action": "toggle_hidden"}))
+                                            if gs.get('fakeout_active', False) and not is_local:
+                                                await websocket.send(json.dumps({"type": "action", "action": "toggle_fakeout"}))
+                                            gs['hidden_mode'] = False
+                                            gs['fakeout_active'] = False
+                                            client_state['fill_fade_timer'] = 1.0
+                                            d = d_moves[-1]
+                                            d_fr, d_fc, d_tr, d_tc = d['fr'], d['fc'], d['tr'], d['tc']
+                                            is_hid = d.get('hidden', False)
+                                            is_fake = d.get('fakeout', False)
+                                            col = (245, 120, 20) if is_fake else ((30, 110, 255) if is_hid else (239, 68, 68))
+                                            sqs = [(d_tr, d_tc, col, 255, False)]
+                                            dr, dc = d_tr - d_fr, d_tc - d_fc
+                                            steps = max(abs(dr), abs(dc))
+                                            if steps > 0:
+                                                alpha = 127
+                                                for i in range(steps - 1, 0, -1):
+                                                    sq_r = d_fr + int(i * dr / steps)
+                                                    sq_c = d_fc + int(i * dc / steps)
+                                                    sqs.append((sq_r, sq_c, col, alpha, False))
+                                                    alpha = max(10, alpha // 2)
+                                            client_state['fade_squares'] = sqs
                                         client_state['selected'] = None
                                         client_state['legal_sq'] = []
                                     else:
@@ -2783,7 +3080,7 @@ async def game_loop():
                                                             p_anim = target_val.piece if hasattr(target_val, 'piece') else target_val[1]
                                                             break
                                                 if p_anim:
-                                                    trigger_piece_anim(client_state, p_anim, nfr, nfc, ntr, ntc, gs.get('hidden_mode', False), gs.get('fakeout_active', False), is_capture)
+                                                    trigger_piece_anim(client_state, p_anim, nfr, nfc, ntr, ntc, gs.get('hidden_mode', False), gs.get('fakeout_used', False) or gs.get('fakeout_active', False), is_capture)
                                                 
                                                 is_fakeout = gs.get('fakeout_used', False)
                                                 is_shadow = gs.get('hidden_count', 0) > 0
@@ -2832,6 +3129,10 @@ async def game_loop():
                                 else:
                                     client_state['selected'] = None
                                     client_state['legal_sq'] = []
+                                    if gs.get('fakeout_active') or client_state.get('draft_fakeout'):
+                                        await MechanicsManager.execute_toggle_fakeout(gs, client_state, is_local, websocket, play_sound, None)
+                                    elif gs.get('hidden_mode') or client_state.get('draft_hidden'):
+                                        await MechanicsManager.execute_toggle_hidden(gs, client_state, is_local, websocket, play_sound, None)
                         else:
                             gs_temp = copy.copy(gs)
                             gs_temp['drafting_active'] = client_state.get('drafting', False)
@@ -2926,13 +3227,13 @@ async def game_loop():
             
             if not client_state['menu_anim_flash'] and m_ms > 200:
                 play_sound('move')
-                spawn_particles(cx, cy, (60, 110, 220), 16, client_state, size=3.5, speed=120, life=0.35)
+                spawn_particles(cx, cy, (245, 120, 20), 16, client_state, size=3.5, speed=120, life=0.35)
                 client_state['menu_anim_flash'] = True
                
             if 200 < m_ms < 700:
                 flash_alpha = max(0, int(180 * (1.0 - (m_ms - 200) / 500.0)))
                 f_surf = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
-                f_surf.fill((60, 110, 220, flash_alpha))
+                f_surf.fill((245, 120, 20, flash_alpha))
                 screen.blit(f_surf, (cx - SQ//2, cy - SQ//2))
             
             p_str = 'wK'
@@ -2965,9 +3266,9 @@ async def game_loop():
                 if progress >= 1.0:
                     radius = (SQ // 2) + int(5 * math.sin(pygame.time.get_ticks() / 100.0))
                     glow_surf = pygame.Surface((SQ + 60, SQ + 60), pygame.SRCALPHA)
-                    pygame.draw.circle(glow_surf, (20, 80, 255, 120), (SQ // 2 + 30, SQ // 2 + 30), radius + 18)
-                    pygame.draw.circle(glow_surf, (40, 110, 255, 200), (SQ // 2 + 30, SQ // 2 + 30), radius + 5)
-                    pygame.draw.circle(glow_surf, (80, 150, 255, 255), (SQ // 2 + 30, SQ // 2 + 30), radius - 4)
+                    pygame.draw.circle(glow_surf, (150, 60, 0, 120), (SQ // 2 + 30, SQ // 2 + 30), radius + 18)
+                    pygame.draw.circle(glow_surf, (200, 90, 10, 200), (SQ // 2 + 30, SQ // 2 + 30), radius + 5)
+                    pygame.draw.circle(glow_surf, (245, 120, 20, 255), (SQ // 2 + 30, SQ // 2 + 30), radius - 4)
                     screen.blit(glow_surf, (cx - SQ // 2 - 30, int(current_y) - SQ // 2 - 30))
                 
                 screen.blit(drawn_k, drawn_k.get_rect(center=(cx, int(current_y))))
@@ -2985,6 +3286,7 @@ async def game_loop():
             
             draw_fancy_btn(screen, "Criar Jogo", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_create, is_hover=btn_create.collidepoint(mouse))
             draw_fancy_btn(screen, "Entrar no Jogo", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_join, is_hover=btn_join.collidepoint(mouse))
+            draw_fancy_btn(screen, "Modo Espectador", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_spectate, is_hover=btn_spectate.collidepoint(mouse))
             draw_fancy_btn(screen, "Jogar Localmente", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_local, is_hover=btn_local.collidepoint(mouse))
             draw_fancy_btn(screen, "Modo Teste", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_test, is_hover=btn_test.collidepoint(mouse))
             draw_fancy_btn(screen, "Replays", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_replays, is_hover=btn_replays.collidepoint(mouse))
@@ -2998,7 +3300,7 @@ async def game_loop():
                     client_state['last_error_msg'] = ""
                 
                 if error_msg:
-                    draw_text_center(screen, error_msg, fonts['small'], T_RED, menu_y_start + 350)
+                    draw_text_center(screen, error_msg, fonts['small'], T_RED, menu_y_start + 400)
                 
             draw_text_center(screen, "By Loopyin", fonts['small'], (150, 150, 150), WIN_H - 30)
 
@@ -3017,7 +3319,10 @@ async def game_loop():
             draw_text_center(screen, "Por favor, aguarde.", fonts['small'], T_DIM, WIN_H // 2 + 25)
 
         elif app_state == "JOINING":
-            draw_text_center(screen, "DIGITE O CÓDIGO DA SALA:", fonts['big'], T_MAIN, WIN_H // 2 - 80)
+            if client_state.get('is_spectating_attempt'):
+                draw_text_center(screen, "DIGITE O CÓDIGO DA SALA (ESPECTADOR):", fonts['big'], T_MAIN, WIN_H // 2 - 80)
+            else:
+                draw_text_center(screen, "DIGITE O CÓDIGO DA SALA:", fonts['big'], T_MAIN, WIN_H // 2 - 80)
             box_w = 160
             input_rect = pygame.Rect(WIN_W // 2 - box_w // 2, WIN_H // 2 - 40, box_w, 60)
             client_state['join_input_rect'] = input_rect

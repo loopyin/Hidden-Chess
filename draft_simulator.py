@@ -51,7 +51,9 @@ def get_draft_state(gs, draft_moves):
     
     # If the player finished their real actions, the draft
     # represents actions starting from their SUBSEQUENT turn.
-    if dgs.get('normal_done') or dgs.get('hidden_count', 0) > 0 or dgs.get('fakeout_count', 0) > 0:
+    can_fakeout = dgs.get('hidden_count', 0) == 1 and dgs.get('fakeout_count', 0) == 0 and not dgs.get('fakeout_used', False)
+    cond = (dgs.get('normal_done', False) or (dgs.get('hidden_count', 0) > 0 and not can_fakeout))
+    if cond or dgs.get('fakeout_count', 0) > 0:
         transition_draft_turn(dgs)
         
     from actions import deserialize_action, EndTurn, MovePiece
@@ -70,6 +72,8 @@ def get_draft_state(gs, draft_moves):
             continue
             
         if isinstance(action, MovePiece):
+            if dgs.get('hidden_count', 0) > 0 and getattr(action, 'fakeout', False) == False:
+                transition_draft_turn(dgs)
             action.execute(dgs)
             
             if not action.hidden and not action.fakeout:

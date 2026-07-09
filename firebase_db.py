@@ -7,6 +7,7 @@ import copy
 import threading
 from debug_utils import check_invariants, log_minimal_snapshot
 from chess_logic import serialize_state, deserialize_state, make_state
+from event_recorder import get_recorder
 
 # Config from firebase-applet-config.json
 PROJECT_ID = "gen-lang-client-0345401514"
@@ -17,6 +18,7 @@ BASE_URL = f"https://firestore.googleapis.com/v1/projects/{PROJECT_ID}/databases
 
 class FirebaseClient:
     def __init__(self):
+        self.recorder = get_recorder('firebase_db')
         self.room_code = None
         self.color = None
         self.token = None
@@ -27,6 +29,7 @@ class FirebaseClient:
         self.last_update_time = None
         
     def _poll(self):
+        self.recorder.record('poll_start', room_code=self.room_code)
         while self.polling:
             if not self.room_code:
                 time.sleep(1)
@@ -42,6 +45,7 @@ class FirebaseClient:
                         if update_time != self.last_update_time:
                             self.last_update_time = update_time
                             fields = data.get("fields", {})
+                            self.recorder.record('poll_update', room_code=self.room_code, update_time=update_time, has_state=('state' in fields))
                             if "state" in fields:
                                 state_str = fields["state"].get("stringValue")
                                 if state_str:
@@ -49,9 +53,10 @@ class FirebaseClient:
                                         if self.on_state_update:
                                             self.on_state_update(state_str)
                                     except Exception as e:
+                                        self.recorder.dump('callback_error', exc=e, context={'room_code': self.room_code, 'update_time': update_time})
                                         print("Error in callback:", e)
             except Exception as e:
-                pass
+                self.recorder.record('poll_error', room_code=self.room_code, error=repr(e))
                 
             time.sleep(1.0)
             
@@ -68,6 +73,7 @@ class FirebaseClient:
     async def create_room(self, room_code, token, initial_state_json):
         self.room_code = room_code
         self.token = token
+        self.recorder.snapshot('create_room', {'turn': None, 'turn_count': None, 'pts': {'w': None, 'b': None}, 'next_queue_w': [], 'next_queue_b': []}, room_code=room_code)
         url = f"{BASE_URL}?documentId={room_code}&key={API_KEY}"
         doc = {
             "fields": {
@@ -94,9 +100,10 @@ class FirebaseClient:
                 
         return await asyncio.to_thread(_post)
 
-    async def join_room(self, room_code, token):
+    async def join_room(self, room_code, token, spectate=False):
         self.room_code = room_code
         self.token = token
+        self.recorder.record('join_room', room_code=room_code)
         url = f"{BASE_URL}/{room_code}?key={API_KEY}"
         
         def _join():
@@ -112,6 +119,17 @@ class FirebaseClient:
                 
             fields = data.get("fields", {})
             tokens = fields.get("tokens", {}).get("mapValue", {}).get("fields", {})
+            
+            is_game_over = False
+            state_str = fields.get("state", {}).get("stringValue", "{}")
+            try:
+                state_dict = json.loads(state_str)
+                is_game_over = state_dict.get("game_over", False)
+            except Exception:
+                pass
+
+            if spectate:
+                return True, {"color": "spectator", "reconnected": False, "game_over": is_game_over}
             
             if "b" not in tokens:
                 tokens["b"] = {"stringValue": token}
@@ -141,16 +159,24 @@ class FirebaseClient:
                     print("join_room patch error:", e)
                 return False, "Erro ao entrar na sala"
             else:
+                is_game_over = False
+                state_str = fields.get("state", {}).get("stringValue", "{}")
+                try:
+                    state_dict = json.loads(state_str)
+                    is_game_over = state_dict.get("game_over", False)
+                except Exception:
+                    pass
                 if tokens.get("w", {}).get("stringValue") == token:
-                    return True, {"color": "w", "reconnected": True}
+                    return True, {"color": "w", "reconnected": True, "game_over": is_game_over}
                 if tokens.get("b", {}).get("stringValue") == token:
-                    return True, {"color": "b", "reconnected": True}
+                    return True, {"color": "b", "reconnected": True, "game_over": is_game_over}
                 return False, "Sala cheia"
                 
         return await asyncio.to_thread(_join)
             
     async def update_state(self, room_code, state_json, token, color):
         url = f"{BASE_URL}/{room_code}?updateMask.fieldPaths=state&key={API_KEY}"
+        self.recorder.record('update_state', room_code=room_code, color=color, payload_len=len(state_json or ''))
         doc = {
             "name": f"projects/{PROJECT_ID}/databases/{DB_ID}/documents/rooms/{room_code}",
             "fields": {
@@ -168,9 +194,13 @@ class FirebaseClient:
                 print("update_state error:", e)
                 return False
                 
-        return await asyncio.to_thread(_patch)
+        result = await asyncio.to_thread(_patch)
+        if not result:
+            self.recorder.record('update_state_failed', room_code=room_code, color=color)
+        return result
 
     def leave_room(self, room_code):
+        self.recorder.record('leave_room', room_code=room_code)
         pass
 
 firebase_client = FirebaseClient()

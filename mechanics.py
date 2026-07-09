@@ -38,7 +38,7 @@ class MechanicsManager:
         state = MechanicsManager.get_eval_state(gs, client_state)
         if state.get('game_over') or state.get('normal_done', False):
             return False
-        return can_afford(state) and state.get('hidden_count', 0) == 0
+        return can_afford(state)
 
     @staticmethod
     def is_hidden_on(gs, client_state):
@@ -56,9 +56,9 @@ class MechanicsManager:
         if not MechanicsManager._is_active_turn(gs, client_state):
             return False
         state = MechanicsManager.get_eval_state(gs, client_state)
-        if state.get('game_over') or state.get('normal_done', False):
+        if state.get('game_over'):
             return False
-        return state.get('fakeout_mode_enabled', False) and can_afford_fakeout(state) and not state.get('fakeout_used', False)
+        return state.get('fakeout_mode_enabled', False) and can_afford_fakeout(state) and not state.get('fakeout_used', False) and state.get('hidden_count', 0) == 1
 
     @staticmethod
     def is_fakeout_on(gs, client_state):

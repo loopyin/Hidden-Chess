@@ -192,7 +192,8 @@ class RenderCell:
     
 class BoardRenderer:
     @staticmethod
-    def get_render_state(gs: Dict[str, Any], client_state: Dict[str, Any], abs_b, tb, my_hidden: Dict[Tuple[int, int], Any], show_hidden: bool) -> List[List[RenderCell]]:
+    def get_render_state(gs: Dict[str, Any], client_state: Dict[str, Any], abs_b, tb, my_hidden: Dict[Tuple[int, int], Any], show_hidden: bool, curr_b=None) -> List[List[RenderCell]]:
+        if curr_b is None: curr_b = gs['board']
         grid = [[RenderCell(r=r, c=c) for c in range(8)] for r in range(8)]
         
         last = gs.get('last_move')
@@ -212,18 +213,42 @@ class BoardRenderer:
         sel = client_state.get('selected')
         if sel:
             sel_r, sel_c = sel
-            # Adjust selection if fakeout is active and the selected piece is hidden
-            if gs.get('fakeout_active') and sel in my_hidden:
-                val = my_hidden[sel]
-                if val.pub_pos:
-                    grid[val.pub_pos[0]][val.pub_pos[1]].is_selected = True
-            else:
-                grid[sel_r][sel_c].is_selected = True
+            grid[sel_r][sel_c].is_selected = True
 
         # Legal moves
+        is_fakeout_drag = False
+        sel = client_state.get('selected')
+        sel_r, sel_c = sel if sel else (None, None)
+        
+        if sel and (gs.get('fakeout_active') or client_state.get('draft_fakeout')):
+            for t_pos, val in my_hidden.items():
+                if val.pub_pos == sel:
+                    is_fakeout_drag = True
+                    break
+
         for (lr, lc) in client_state.get('legal_sq', []):
             grid[lr][lc].is_legal = True
-            grid[lr][lc].is_legal_capture = bool(tb[lr][lc] or (gs.get('ep') and gs['ep'] == (lr, lc)))
+            is_cap = False
+            if not is_fakeout_drag:
+                if gs.get('ep') and gs['ep'] == (lr, lc):
+                    if sel_r is not None and sel_c is not None:
+                        # Only pawn diagonal moves to EP square are captures
+                        p_sel = curr_b[sel_r][sel_c]
+                        if not p_sel: p_sel = tb[sel_r][sel_c]
+                        if p_sel and p_sel[1] == 'P' and sel_c != lc:
+                            is_cap = True
+                elif curr_b[lr][lc]:
+                    if my_color in ('w', 'b'):
+                        is_predicting = client_state.get('predicting_mode', False)
+                        if is_predicting:
+                            if pc(curr_b[lr][lc]) == my_color:
+                                is_cap = True
+                        else:
+                            if pc(curr_b[lr][lc]) != my_color:
+                                is_cap = True
+                    else:
+                        is_cap = True
+            grid[lr][lc].is_legal_capture = is_cap
 
         # Threatened allied pieces
         if my_color in ('w', 'b'):
@@ -312,7 +337,6 @@ class BoardRenderer:
                         if show_hidden:
                             for t_pos, val in my_hidden.items():
                                 if val.pub_pos == (r, c):
-                                    grid[r][c].ghost_alpha = 76
                                     if val.is_fakeout:
                                         grid[r][c].is_fake_residual = True
                                     break
@@ -324,7 +348,7 @@ class BoardRenderer:
                     # if it's animating from here, it shouldn't be drawn, but we handle that in the drawing logic if needed.
 
                 # Set frozen state
-                if (r, c) in gs.get('frozen_pieces', set()):
+                if (r, c) in gs.get('frozen_pieces', set()) and show_hidden:
                     grid[r][c].is_frozen = True
 
         return grid

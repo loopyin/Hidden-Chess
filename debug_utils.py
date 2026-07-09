@@ -9,7 +9,7 @@ def check_invariants(gs):
     # 2. Points are valid
     for c in ('w', 'b'):
         if 'pts' in gs and c in gs['pts']:
-            assert gs['pts'][c] >= 0, f"Negative points for {c}: {gs['pts'][c]}"
+            assert round(gs['pts'][c], 2) >= 0, f"Negative points for {c}: {gs['pts'][c]}"
 
     # Kings exist validation
     from chess_logic import get_true_board
@@ -44,7 +44,13 @@ def log_minimal_snapshot(gs, action_name):
     pts_w = gs.get('pts', {}).get('w', '?')
     pts_b = gs.get('pts', {}).get('b', '?')
     hidden_count = gs.get('hidden_count', 0)
+    fakeout_count = gs.get('fakeout_count', 0)
+    frozen_count = len(gs.get('frozen_pieces', []))
     draft_count = len(gs.get(f'next_queue_{turn}', []))
+    last_predict = gs.get('last_predict')
+    predict_by = last_predict.get('by', 'None') if last_predict else 'None'
     
     print(f"[DEBUG] Turn={turn_count}({turn}) Action={action_name} " 
-          f"PTS={{w:{pts_w}, b:{pts_b}}} HiddenCount={hidden_count} DraftCount={draft_count}")
+          f"PTS={{w:{pts_w}, b:{pts_b}}} HiddenCount={hidden_count} "
+          f"FakeoutCount={fakeout_count} FrozenCount={frozen_count} "
+          f"DraftCount={draft_count} PredictBy={predict_by}")

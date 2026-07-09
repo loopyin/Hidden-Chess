@@ -174,28 +174,37 @@ def check_fakeout_collision(c, fr, fc, tr, tc, p, gs):
 
     return False
 
-def legal(gs, row, fc):
+def legal(gs, row, fc, as_fakeout=False):
     c = gs['turn']
     if (row, fc) in gs.get('frozen_pieces', set()):
         return []
+        
+    my_hidden = gs['hidden_w'] if c == 'w' else gs['hidden_b']
+    for t_pos, val in my_hidden.items():
+        if val.pub_pos == (row, fc):
+            row, fc = t_pos
+            break
+            
     tb = get_true_board(gs, c)
     abs_b = get_absolute_board(gs)
     p = tb[row][fc]
     res = []
     if not p: return res
 
-    my_hidden = gs['hidden_w'] if c == 'w' else gs['hidden_b']
-    if gs.get('fakeout_active') and (row, fc) in my_hidden:
+    if pt(p) == 'K' and (gs.get('hidden_mode') or gs.get('fakeout_active') or as_fakeout):
+        return res
+
+    if (gs.get('fakeout_active') or as_fakeout) and (row, fc) in my_hidden:
         val = my_hidden[(row, fc)]
         pub_pos = val.pub_pos
         if pub_pos:
             fake_tb = cpb(tb)
             fake_tb[pub_pos[0]][pub_pos[1]] = p
-            fake_tb[row][fc] = None
-
+            # Keep the true piece to act as an obstacle
+            
             fake_abs = cpb(abs_b)
             fake_abs[pub_pos[0]][pub_pos[1]] = p
-            fake_abs[row][fc] = None
+            # Keep the true piece to act as an obstacle
 
             for tr, tc in pseudo(fake_tb, fake_abs, pub_pos[0], pub_pos[1], gs['ep'], gs['cr']):
                 target = fake_abs[tr][tc]
@@ -299,6 +308,8 @@ def get_absolute_board(gs):
 
 def get_true_board(gs, color):
     b = cpb(gs['board'])
+    if color == 'spectator':
+        return b
     my_hidden = gs['hidden_w'] if color == 'w' else gs['hidden_b']
     for (tr, tc), val in my_hidden.items():
         pub_pos, p = val.pub_pos, val.piece
@@ -327,6 +338,7 @@ def make_state():
         fakeout_seq={'w': 0, 'b': 0},
         normal_done=False,
         last_move=None,
+        last_predict=None,
         log=[],
         game_over=False,
         game_over_msg='',
@@ -361,16 +373,65 @@ def fakeout_cost(gs):
     seq = fs if isinstance(fs, int) else fs.get(gs['turn'], 0)
     return 2 ** (seq + gs.get('fakeout_count', 0))
 
+
+def compare_move_tuples(a, b):
+    if not a or not b:
+        return False
+    return tuple(a) == tuple(b)
+
+def register_predict_move(gs, predictor_color, fr, fc, tr, tc, promo=None, cost=0.2):
+    if gs.get('game_over'):
+        return False
+
+    pts = gs['pts'].get(predictor_color, 0)
+    if not isinstance(pts, (int, float)) or pts < cost:
+        return False
+
+    gs['pts'][predictor_color] = round(pts - cost, 2)
+    gs['last_predict'] = {
+        'by': predictor_color,
+        'move': (fr, fc, tr, tc, promo),
+    }
+    gs['last_predict_visible_to'] = predictor_color
+    return True
+
+def resolve_pending_prediction(gs, mover_color, actual_move):
+    pred = gs.get('last_predict')
+    if not pred:
+        return None
+
+    predictor = pred.get('by')
+    predicted_move = pred.get('move')
+    if not predictor or predictor == mover_color:
+        return None
+
+    q_key = f'next_queue_{predictor}'
+    if not gs.get(q_key):
+        pts = gs['pts'].get(predictor, 0)
+        if isinstance(pts, (int, float)):
+            gs['pts'][predictor] = round(pts + 0.2, 2)
+        gs['last_predict'] = None
+        gs['last_predict_visible_to'] = None
+        return None
+
+    matched = compare_move_tuples(predicted_move, actual_move)
+    
+    if matched and gs.get(q_key) and isinstance(gs[q_key][0], dict):
+        gs[q_key][0]['predict_success'] = True
+
+    gs['last_predict'] = None
+    gs['last_predict_visible_to'] = None
+    return matched
 def can_afford(gs):
     pts = gs['pts'][gs['turn']]
-    if isinstance(pts, int):
+    if isinstance(pts, (int, float)):
         if pts < 0: return False
         return pts >= hidden_cost(gs)
     return False
 
 def can_afford_fakeout(gs):
     pts = gs['pts'][gs['turn']]
-    if isinstance(pts, int):
+    if isinstance(pts, (int, float)):
         if pts < 0: return False
         return pts >= fakeout_cost(gs)
     return False
@@ -471,7 +532,9 @@ def end_turn(gs, process_queue=False):
             if gs.get('score_to_win') and gs['pts'][l] > gs['pts'][w]:
                 # The one who got checkmated wins because they have more points
                 winner = l
-                reason = f"por maior estoque de pontos ({gs['pts'][l]} vs {gs['pts'][w]})!"
+                pts_l = str(int(gs['pts'][l])) if gs['pts'][l] == int(gs['pts'][l]) else f"{round(gs['pts'][l], 2)}"
+                pts_w = str(int(gs['pts'][w])) if gs['pts'][w] == int(gs['pts'][w]) else f"{round(gs['pts'][w], 2)}"
+                reason = f"por maior estoque de pontos ({pts_l} vs {pts_w})!"
             else:
                 winner = w
                 reason = "por xeque-mate!"
@@ -482,9 +545,15 @@ def end_turn(gs, process_queue=False):
             gs['game_over'] = True
             gs['game_over_msg'] = 'Afogamento — empate!'
 
-    # Manual execution of next queues is now required by the user
-    # if process_queue:
-    #     process_next_queues(gs)
+    if not gs.get('game_over'):
+        next_c = gs['turn']
+        q_key = f'next_queue_{next_c}'
+        if gs.get(q_key) and isinstance(gs[q_key][0], dict) and gs[q_key][0].get('predict_success'):
+            # Remove the flag so it doesn't trigger again
+            gs[q_key][0].pop('predict_success', None)
+            
+            # Process the queued moves
+            process_next_queues(gs, max_moves=1)
 
 def get_next_turn_from_queue(gs, color):
     q_key = f'next_queue_{color}'
@@ -520,10 +589,13 @@ def compare_turns(actions1, actions2):
                     return False
     return True
 
-def process_next_queues(gs):
+def process_next_queues(gs, max_moves=None):
     from actions import deserialize_action, EndTurn, MovePiece
     starting_color = gs['turn']
+    moves_processed = 0
     while not gs['game_over']:
+        if max_moves is not None and moves_processed >= max_moves:
+            break
         c = gs['turn']
         if c != starting_color:
             break
@@ -546,8 +618,10 @@ def process_next_queues(gs):
                 promo=act_data.get('promo'),
                 fakeout=act_data.get('fakeout', False)
             )
-            # Legacy explicitly ended turn, but we'll adapt to new flow
 
+        moves_processed += 1
+        
+        # Legacy explicitly ended turn, but we'll adapt to new flow
         if isinstance(action, EndTurn):
             end_turn(gs)
             # If end_turn changes the turn, the while loop will check the next player's queue
@@ -563,8 +637,11 @@ def process_next_queues(gs):
             gs['fakeout_active'] = old_fakeout_active
 
             if is_valid_move:
-                gs['pts'][c] += 1
+                gs['pts'][c] = round(gs['pts'][c] + 1, 2)
                 res = action.execute(gs)
+                
+                if dt_suffix and gs['log']:
+                    gs['log'][-1] = gs['log'][-1] + dt_suffix
                 
                 if not action.hidden and not action.fakeout:
                     gs['normal_done'] = True
@@ -573,7 +650,7 @@ def process_next_queues(gs):
                     # Must wait for user to resolve ghost conflict manually. Turn remains active.
                     break
             else:
-                gs['pts'][c] -= 1
+                gs['pts'][c] = round(gs['pts'][c] - 1, 2)
                 if action.hidden:
                     note_msg = "Lance inválido. Turno manual iniciado."
                     gs['log'].append(f"HIDDEN|{c}|{note_msg}|0{dt_suffix}")
@@ -617,14 +694,18 @@ def ice_king_interaction(gs, kr, kc, tr, tc):
     
     if (tr, tc) in frozen:
         frozen.remove((tr, tc))
-        gs['pts'][c] -= val
+        gs['pts'][c] = round(gs['pts'][c] - val, 2)
         gs['log'].append(f"ICE|{c}| O rei descongelou {alg(tc, tr)} (-{val}pt)")
-        return 'unfrozen'
+        res = 'unfrozen'
     else:
         frozen.add((tr, tc))
-        gs['pts'][c] += val
+        gs['pts'][c] = round(gs['pts'][c] + val, 2)
         gs['log'].append(f"ICE|{c}| O rei congelou {alg(tc, tr)} (+{val}pt)")
-        return 'frozen'
+        res = 'frozen'
+        
+    gs['fakeout_active'] = False
+    gs['hidden_mode'] = False
+    return res
 
 def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
     board = gs['board']
@@ -633,10 +714,25 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
     enemy_hidden = gs['hidden_b'] if c == 'w' else gs['hidden_w']
 
     abs_b = get_absolute_board(gs)
+    
+    is_casca_drag = False
+    for t_pos, val in my_hidden.items():
+        if val.pub_pos == (fr, fc):
+            fr, fc = t_pos
+            is_casca_drag = True
+            break
+            
+    is_fakeout = gs.get('fakeout_active', False)
+    
+    if is_casca_drag and not is_fakeout:
+        return False
+        
     tb = get_true_board(gs, c)
     p = tb[fr][fc]
+    
+    if pt(p) == 'K' and (hidden_move or is_fakeout):
+        return False
 
-    is_fakeout = gs.get('fakeout_active', False)
     if is_fakeout and (tr, tc) not in legal(gs, fr, fc):
         return False
 
@@ -729,7 +825,7 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
 
     cap_true = abs_b[tr][tc]
     if cap_true and pc(cap_true) != c:
-        gs['pts'][c] += VALUES.get(pt(cap_true), 0)
+        gs['pts'][c] = round(gs['pts'][c] + VALUES.get(pt(cap_true), 0), 2)
         enemy_captured = gs['captured_w'] if c == 'b' else gs['captured_b']
         enemy_captured.add((tr, tc))
 
@@ -746,7 +842,7 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         gs['moved_this_turn'].add((tr, tc))
         
         cost = fakeout_cost(gs)
-        gs['pts'][c] -= cost
+        gs['pts'][c] = round(gs['pts'][c] - cost, 2)
         gs['fakeout_count'] = gs.get('fakeout_count', 0) + 1
 
         # Clear starting spot on public board
@@ -767,7 +863,7 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         # Place fakeout piece on target square on public board
         board[tr][tc] = p
 
-        gs['log'].append(f'FAKEOUT|{c}|{note}')
+        gs['log'].append(f'FAKEOUT|{c}|{note}|{cost}')
         ply_idx = len(gs['log'])
         if 'shadow_history' not in gs:
             gs['shadow_history'] = {}
@@ -812,6 +908,7 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
             if cfr == (7 if c == 'w' else 0) and cfc == 0: gs['cr'][c + 'Q'] = False
             if cfr == (7 if c == 'w' else 0) and cfc == 7: gs['cr'][c + 'K'] = False
         gs['normal_done'] = False
+        resolve_pending_prediction(gs, c, (fr, fc, tr, tc, promo))
         return True
 
     elif hidden_move:
@@ -819,7 +916,7 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
             return False
 
         cost = hidden_cost(gs)
-        gs['pts'][c] -= cost
+        gs['pts'][c] = round(gs['pts'][c] - cost, 2)
         gs['hidden_count'] += 1
 
         if (fr, fc) in my_hidden:
@@ -862,6 +959,7 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
             rp = tb[fr][r_fc]
             if rp:
                 my_hidden[(fr, r_tc)] = PieceMetaModifier(pub_pos=(fr, r_fc), piece=rp, path=[(fr, r_fc), (fr, r_tc)], is_fakeout=False, fakeout_path=[], plies=prev_plies + [ply_idx])
+        resolve_pending_prediction(gs, c, (fr, fc, tr, tc, promo))
     else:
         gs['normal_done'] = True
         gs['last_move'] = (fr, fc, tr, tc)
@@ -892,6 +990,7 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         do_move(board, fr, fc, tr, tc, gs['ep'], gs['cr'], promo)
 
         gs['log'].append(f'NORMAL|{c}|{note}')
+        resolve_pending_prediction(gs, c, (fr, fc, tr, tc, promo))
 
     gs['ep'] = None
     if pt(p) == 'P' and abs(tr - fr) == 2: gs['ep'] = ((fr + tr) // 2, fc)
@@ -941,7 +1040,8 @@ def get_ui_selection(gs, r, c, draft_moves=None):
         if not can_afford_fakeout(curr_dgs):
             can_select_anything = False
     else:
-        if (curr_dgs.get('normal_done') or curr_dgs.get('hidden_count', 0) > 0):
+        can_fakeout = curr_dgs.get('hidden_count', 0) == 1 and curr_dgs.get('fakeout_count', 0) == 0 and not curr_dgs.get('fakeout_used', False)
+        if (curr_dgs.get('normal_done') or (curr_dgs.get('hidden_count', 0) > 0 and not can_fakeout)):
             can_select_anything = False
         if curr_dgs.get('hidden_mode') and not can_afford(curr_dgs):
             can_select_anything = False
@@ -950,17 +1050,14 @@ def get_ui_selection(gs, r, c, draft_moves=None):
         return None, []
     
     target_hidden_true_pos = None
-    if curr_dgs.get('fakeout_active'):
-        for t_pos, val in my_hidden.items():
-            if val.pub_pos == (r, c):
-                target_hidden_true_pos = t_pos
-                break
+    for t_pos, val in my_hidden.items():
+        if val.pub_pos == (r, c):
+            target_hidden_true_pos = t_pos
+            break
                 
     if target_hidden_true_pos is not None:
-        sel = target_hidden_true_pos
-        legals = legal(curr_dgs, sel[0], sel[1])
-        if not is_drafting and curr_dgs.get('hidden_count', 0) > 0 and not curr_dgs.get('fakeout_active'):
-            legals = []
+        sel = (r, c)
+        legals = legal(curr_dgs, target_hidden_true_pos[0], target_hidden_true_pos[1], as_fakeout=True)
         return sel, legals
     else:
         if curr_dgs.get('fakeout_active') and (r, c) in my_hidden:
@@ -969,8 +1066,6 @@ def get_ui_selection(gs, r, c, draft_moves=None):
             p = tb[r][c]
             if p and pc(p) == active_color:
                 legals = legal(curr_dgs, r, c)
-                if not is_drafting and curr_dgs.get('hidden_count', 0) > 0 and not curr_dgs.get('fakeout_active'):
-                    legals = []
                 # Remove already moved pieces if not drafting
                 if not is_drafting and (r, c) in curr_dgs.get('moved_this_turn', set()):
                     legals = []
@@ -998,21 +1093,25 @@ def serialize_state(gs, player_color=None, dgs=None):
     def clean_queue(q, is_author, author_color):
         if not q:
             return []
-        if is_author:
+        if player_color == 'server' or is_author:
             return list(q)
-        
-        clean = []
-        for m in q:
-            if hasattr(m, 'get'):
-                if m.get('hidden') or m.get('fakeout'):
-                    continue
-            clean.append(m)
-        return clean
+        return []
 
     filtered_log = []
     classified_entries = []
     normal_moves_count = 0
     for idx, entry in enumerate(gs['log']):
+        if isinstance(entry, dict):
+            classified_entries.append({
+                'type': entry.get('type', 'SYSTEM'),
+                'color': 'system',
+                'text': entry.get('text', ''),
+                'color_type': entry.get('color_type', 'system'),
+                'drafted_turn': None
+            })
+            filtered_log.append(entry)
+            continue
+            
         parts = entry.split('|')
         ply_idx = idx + 1
         is_active = True
@@ -1029,8 +1128,14 @@ def serialize_state(gs, player_color=None, dgs=None):
                 drafted_turn = int(last_part[1:])
                 parts.pop()
 
+        if drafted_turn is not None and len(parts) > 1:
+            if parts[0] in ('HIDDEN', 'FAKEOUT', 'NORMAL', 'NEXT', 'ICE'):
+                if player_color not in ('server', parts[1]):
+                    drafted_turn = None
+
         if parts[0] == 'HIDDEN':
-            color, note, cost = parts[1], parts[2], parts[3]
+            color, note = parts[1], parts[2]
+            cost = parts[3] if len(parts) > 3 else "0"
             if "Lance inválido. Turno manual iniciado." in note:
                 if color == player_color:
                     classified_entries.append({
@@ -1046,7 +1151,7 @@ def serialize_state(gs, player_color=None, dgs=None):
                     'type': 'HIDDEN',
                     'color': color,
                     'text': txt,
-                    'color_type': 'hidden',
+                    'color_type': 'draft_hidden' if drafted_turn else 'hidden',
                     'drafted_turn': drafted_turn
                 })
             elif not is_active or gs.get('game_over', False):
@@ -1060,6 +1165,7 @@ def serialize_state(gs, player_color=None, dgs=None):
                 })
         elif parts[0] == 'FAKEOUT':
             color, note = parts[1], parts[2]
+            cost = parts[3] if len(parts) > 3 else "0"
             if "Lance inválido. Turno manual iniciado." in note:
                 if color == player_color:
                     classified_entries.append({
@@ -1070,12 +1176,12 @@ def serialize_state(gs, player_color=None, dgs=None):
                         'drafted_turn': drafted_turn
                     })
             elif color == player_color:
-                txt = f"{note}"
+                txt = f"{note} (-{cost}pt)"
                 classified_entries.append({
                     'type': 'FAKEOUT',
                     'color': color,
                     'text': txt,
-                    'color_type': 'fakeout',
+                    'color_type': 'draft_fakeout' if drafted_turn else 'fakeout',
                     'drafted_turn': drafted_turn
                 })
             else:
@@ -1147,7 +1253,7 @@ def serialize_state(gs, player_color=None, dgs=None):
                         'type': 'NORMAL',
                         'color': color,
                         'text': txt,
-                        'color_type': 'white_move',
+                        'color_type': 'draft_normal' if drafted_turn else 'white_move',
                         'move_num': normal_moves_count,
                         'drafted_turn': drafted_turn
                     })
@@ -1157,7 +1263,7 @@ def serialize_state(gs, player_color=None, dgs=None):
                         'type': 'NORMAL',
                         'color': color,
                         'text': txt,
-                        'color_type': 'black_move',
+                        'color_type': 'draft_normal' if drafted_turn else 'black_move',
                         'drafted_turn': drafted_turn
                     })
         elif parts[0] == 'NEXT':
@@ -1176,6 +1282,18 @@ def serialize_state(gs, player_color=None, dgs=None):
                 'color': color,
                 'text': note,
                 'color_type': 'system',
+                'drafted_turn': drafted_turn
+            })
+        elif parts[0] == 'PREDICT':
+            txt = parts[1]
+            predictor_color = parts[2] if len(parts) > 2 else player_color
+            if player_color not in ('server', predictor_color):
+                continue
+            classified_entries.append({
+                'type': 'PREDICT',
+                'color': predictor_color,
+                'text': txt,
+                'color_type': 'predict',
                 'drafted_turn': drafted_turn
             })
         else:
@@ -1283,13 +1401,13 @@ def serialize_state(gs, player_color=None, dgs=None):
     elif player_color == 'b':
         safe_pts['w'] = '?'
 
-    hidden_w_safe = convert_hidden(gs['hidden_w']) if player_color == 'w' else {}
-    hidden_b_safe = convert_hidden(gs['hidden_b']) if player_color == 'b' else {}
+    hidden_w_safe = convert_hidden(gs['hidden_w']) if player_color in ('w', 'server') else {}
+    hidden_b_safe = convert_hidden(gs['hidden_b']) if player_color in ('b', 'server') else {}
 
     shadow_history_safe = {}
     for ply, info in gs.get('shadow_history', {}).items():
         ply_str = str(ply)
-        if info['color'] == player_color or not info['active'] or gs.get('game_over', False):
+        if player_color == 'server' or info['color'] == player_color or not info['active'] or gs.get('game_over', False):
             shadow_history_safe[ply_str] = info
 
     ret = {
@@ -1303,13 +1421,14 @@ def serialize_state(gs, player_color=None, dgs=None):
         'shadow_history': shadow_history_safe,
         'captured_w': [list(x) for x in gs['captured_w']],
         'captured_b': [list(x) for x in gs['captured_b']],
-        'hidden_mode': gs['hidden_mode'],
-        'hidden_count': gs['hidden_count'],
+        'hidden_mode': gs['hidden_mode'] if player_color in ('server', gs['turn']) or gs.get('game_over', False) else False,
+        'hidden_count': gs['hidden_count'] if player_color in ('server', gs['turn']) or gs.get('game_over', False) else 0,
         'hidden_seq': gs.get('hidden_seq', {'w': 0, 'b': 0}),
-        'fakeout_count': gs.get('fakeout_count', 0),
+        'fakeout_count': gs.get('fakeout_count', 0) if player_color in ('server', gs['turn']) or gs.get('game_over', False) else 0,
         'fakeout_seq': gs.get('fakeout_seq', {'w': 0, 'b': 0}),
         'normal_done': gs['normal_done'],
         'last_move': list(gs['last_move']) if (gs.get('last_move') and (not gs.get('last_move_visible_to') or gs['last_move_visible_to'] == player_color or gs.get('game_over', False))) else None,
+        'last_predict': {'by': gs['last_predict']['by'], 'move': list(gs['last_predict']['move'])} if (gs.get('last_predict') and (player_color in ('server', gs.get('last_predict_visible_to')) or gs.get('game_over', False))) else None,
         'log': filtered_log,
         'classified_log': classified_entries,
         'log_turns': turns,
@@ -1324,13 +1443,13 @@ def serialize_state(gs, player_color=None, dgs=None):
         'ghost_capture_flash': list(gs['ghost_capture_flash']) if gs.get('ghost_capture_flash') else None,
         'ghost_capture_type': gs.get('ghost_capture_type'),
         'reveal_flashes': gs.get('reveal_flashes', []),
-        'fakeout_active': gs.get('fakeout_active', False),
-        'fakeout_used': gs.get('fakeout_used', False),
+        'fakeout_active': gs.get('fakeout_active', False) if player_color in ('server', gs['turn']) or gs.get('game_over', False) else False,
+        'fakeout_used': gs.get('fakeout_used', False) if player_color in ('server', gs['turn']) or gs.get('game_over', False) else False,
         'fakeout_mode_enabled': gs.get('fakeout_mode_enabled', True),
         'opponent_joined': gs.get('opponent_joined', False),
         'next_queue_w': clean_queue(gs.get('next_queue_w'), player_color == 'w', 'w'),
         'next_queue_b': clean_queue(gs.get('next_queue_b'), player_color == 'b', 'b'),
-        'moved_this_turn': [list(x) for x in gs.get('moved_this_turn', set())],
+        'moved_this_turn': [list(x) for x in gs.get('moved_this_turn', set())] if player_color in ('server', gs['turn']) or gs.get('game_over', False) else [],
         'frozen_pieces': [list(p) for p in gs.get('frozen_pieces', set())]
     }
 
@@ -1390,6 +1509,8 @@ def deserialize_state(data):
         'fakeout_seq': data.get('fakeout_seq', {'w': 0, 'b': 0}),
         'normal_done': data['normal_done'],
         'last_move': tuple(data['last_move']) if data['last_move'] else None,
+        'last_predict': {'by': data['last_predict']['by'], 'move': tuple(data['last_predict']['move'])} if data.get('last_predict') else None,
+        'last_predict_visible_to': data.get('last_predict', {}).get('by') if data.get('last_predict') else None,
         'log': data['log'],
         'classified_log': data.get('classified_log', []),
         'log_turns': data.get('log_turns', []),
