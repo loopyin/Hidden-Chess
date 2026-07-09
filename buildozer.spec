@@ -19,7 +19,7 @@ source.include_exts = py,png,jpg,kv,atlas,ttf,json,wav,ogg
 version = 1.5.4
 
 # (list) Application requirements
-requirements = python3==3.10.14,hostpython3==3.10.14,pygame
+requirements = python3==3.10.14,hostpython3==3.10.14,pygame,certifi,openssl
 
 # (str) Supported orientation (one of landscape, sensorLandscape, portrait or all)
 orientation = portrait

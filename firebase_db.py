@@ -1,5 +1,16 @@
 import urllib.request
 import urllib.error
+import ssl
+import certifi
+
+def _get_ssl_context():
+    try:
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl._create_unverified_context()
+
+ssl._create_default_https_context = _get_ssl_context
+
 import asyncio
 import json
 import time
