@@ -40,7 +40,16 @@ jobs:
         run: |
           echo "pip<24.1" > /tmp/pip-constraint.txt
           export PIP_CONSTRAINT=/tmp/pip-constraint.txt
-          buildozer android debug
+          # Clear cache to avoid inheritance of old API defaults
+          rm -rf ~/.buildozer
+          rm -rf .buildozer
+          # Generate a dummy keystore for signing the release APK
+          keytool -genkey -v -keystore release.keystore -alias release -keyalg RSA -keysize 2048 -validity 10000 -storepass release123 -keypass release123 -dname "CN=HiddenChess, OU=Games, O=Unknown, L=Unknown, ST=Unknown, C=Unknown"
+          export P4A_RELEASE_KEYSTORE=$(pwd)/release.keystore
+          export P4A_RELEASE_KEYALIAS=release
+          export P4A_RELEASE_KEYSTORE_PASS=release123
+          export P4A_RELEASE_KEYALIAS_PASS=release123
+          buildozer android release
           
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4

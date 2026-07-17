@@ -330,36 +330,31 @@ def load_assets(theme_name="classic"):
     theme_dir = resource_path(os.path.join("assets", "themes", theme_name.lower()))
     sounds_dir = resource_path(os.path.join("assets", "sounds"))
 
-    if os.path.isdir(theme_dir):
-        for bp in _theme_image_names():
-            img_path = resource_path(os.path.join(theme_dir, f"{bp}.png"))
-            if os.path.exists(img_path):
-                try:
-                    img = _load_image(img_path, alpha=True)
-                    IMAGES[bp] = pygame.transform.smoothscale(img, (SQ, SQ))
-                except Exception:
-                    pass
+    for bp in _theme_image_names():
+        img_path = resource_path(os.path.join(theme_dir, f"{bp}.png"))
+        try:
+            img = _load_image(img_path, alpha=True)
+            IMAGES[bp] = pygame.transform.smoothscale(img, (SQ, SQ))
+        except Exception:
+            pass
 
-        board_path = resource_path(os.path.join(theme_dir, "board.png"))
-        if os.path.exists(board_path):
-            try:
-                img = _load_image(board_path, alpha=False)
-                IMAGES['board'] = pygame.transform.smoothscale(img, (BOARD_PX, BOARD_PX))
-            except Exception:
-                pass
+    board_path = resource_path(os.path.join(theme_dir, "board.png"))
+    try:
+        img = _load_image(board_path, alpha=False)
+        IMAGES['board'] = pygame.transform.smoothscale(img, (BOARD_PX, BOARD_PX))
+    except Exception:
+        pass
 
     try:
         pygame.mixer.init()
-        if os.path.isdir(sounds_dir):
-            for sx in ['move', 'capture', 'check', 'game_over', 'hidden', 'hidden_off', 'fakeout', 'fakeout_off', 'click', 'select', 'toggle', 'start', 'resign', 'next', 'end', 'next_move', 'spotted', 'fakeout_spotted', 'menu', 'freeze', 'unfreeze', 'error']:
-                for ext in ['.wav', '.ogg', '.raw']:
-                    snd_path = resource_path(os.path.join(sounds_dir, f"{sx}{ext}"))
-                    if os.path.exists(snd_path):
-                        try:
-                            SOUNDS[sx] = pygame.mixer.Sound(snd_path)
-                            break
-                        except Exception:
-                            pass
+        for sx in ['move', 'capture', 'check', 'game_over', 'hidden', 'hidden_off', 'fakeout', 'fakeout_off', 'click', 'select', 'toggle', 'start', 'resign', 'next', 'end', 'next_move', 'spotted', 'fakeout_spotted', 'menu', 'freeze', 'unfreeze', 'error']:
+            for ext in ['.wav', '.ogg', '.raw']:
+                snd_path = resource_path(os.path.join(sounds_dir, f"{sx}{ext}"))
+                try:
+                    SOUNDS[sx] = pygame.mixer.Sound(snd_path)
+                    break
+                except Exception:
+                    pass
     except Exception:
         pass
 
@@ -1170,6 +1165,28 @@ def draw_board(screen, gs, fonts, client_state, mouse):
             pygame.draw.circle(psurf, (*p['color'], alpha), (size, size), size)
             screen.blit(psurf, (int(p['x'] - size), int(p['y'] - size)))
 
+    if 'dropped_ghosts' in client_state:
+        for g in client_state['dropped_ghosts']:
+            gp = g['p']
+            p_t = g['t'] / g['max_t']
+            
+            if gp in IMAGES:
+                img = IMAGES[gp]
+                scaled_img = pygame.transform.rotozoom(img, g['angle'], g['scale'])
+            else:
+                pc_col = (255, 255, 255) if pc(gp) == 'w' else (25, 25, 25)
+                ps = fonts['piece'].render(GLYPHS.get(gp, gp), True, pc_col)
+                scaled_img = pygame.transform.rotozoom(ps, 0, g['scale'])
+                
+            # Ghost effect: simple fade out
+            rect = scaled_img.get_rect(midbottom=(g['mx'], g['my']))
+            
+            # Set alpha on original image to fade out
+            scaled_img_copy = scaled_img.copy()
+            scaled_img_copy.set_alpha(int(255 * (1.0 - p_t)))
+            
+            screen.blit(scaled_img_copy, rect)
+
     if client_state.get('is_dragging_gesture') and 'drag_pos' in client_state:
         mx, my = client_state['drag_pos']
         p = client_state.get('drag_piece_name')
@@ -1178,21 +1195,36 @@ def draw_board(screen, gs, fonts, client_state, mouse):
             is_hid = client_state.get('hidden_triggered', False) or gs.get('hidden_mode', False) or client_state.get('draft_hidden', False)
 
             
-            piece_top = my - SQ
+            dr_sq, dc_sq = client_state.get('drag_piece_sq', (0, 0))
+            flipped = client_state.get('flipped', False)
+            start_r = 7 - dr_sq if flipped else dr_sq
+            start_c = 7 - dc_sq if flipped else dc_sq
+            start_mx = start_c * SQ + SQ // 2
+            start_my = start_r * SQ + SQ
+            
+            anim_t = client_state.get('drag_anim_t', 0.0)
+            ease = 1.0 - (1.0 - anim_t) * (1.0 - anim_t)
+            
+            curr_mx = start_mx + (mx - start_mx) * ease
+            curr_my = start_my + (my - start_my) * ease
+            curr_scale = 1.0 + 1.5 * ease
+            
+            piece_top = curr_my - SQ
             if p in IMAGES:
                 img = IMAGES[p]
                 vx, vy = client_state.get('drag_vel', (0.0, 0.0))
-                angle = vx * 1.5
+                angle = vx * 1.5 * ease
                 angle = max(-35, min(35, angle))
-                scaled_img = pygame.transform.rotozoom(img, angle, 2.5)
-                rect = scaled_img.get_rect(midbottom=(mx, my))
+                scaled_img = pygame.transform.rotozoom(img, angle, curr_scale)
+                rect = scaled_img.get_rect(midbottom=(curr_mx, curr_my))
                 screen.blit(scaled_img, rect)
                 piece_top = rect.top
             else:
                 pc_col = (255, 255, 255) if pc(p) == 'w' else (25, 25, 25)
                 ps = fonts['piece'].render(GLYPHS.get(p, p), True, pc_col)
-                rect = ps.get_rect(midbottom=(mx, my))
-                screen.blit(ps, rect)
+                scaled_ps = pygame.transform.rotozoom(ps, 0, curr_scale)
+                rect = scaled_ps.get_rect(midbottom=(curr_mx, curr_my))
+                screen.blit(scaled_ps, rect)
                 piece_top = rect.top
                 
             is_auto_fakeout = client_state.get('casca_auto_fakeout', False)
@@ -1381,17 +1413,18 @@ def draw_panel(screen, gs, fonts, mouse, client_state):
     pill_rect = st_rect.inflate(24, 12)
 
     draw_rect_aa(screen, (20, 20, 24), pill_rect, 12)
-    if hmode:
-        draw_rect_aa(screen, (80, 120, 220), pill_rect, 12, 1)
-    elif fmode:
-        draw_rect_aa(screen, (245, 120, 20), pill_rect, 12, 1)
-    elif gs['normal_done']:
-        if client_state.get('predicting_mode'):
-            draw_rect_aa(screen, (255, 235, 59), pill_rect, 12, 1)
+    if turn == my_color and not client_state['waiting'] and not history_active:
+        if hmode:
+            draw_rect_aa(screen, (80, 120, 220), pill_rect, 12, 1)
+        elif fmode:
+            draw_rect_aa(screen, (245, 120, 20), pill_rect, 12, 1)
+        elif gs['normal_done']:
+            if client_state.get('predicting_mode'):
+                draw_rect_aa(screen, (255, 235, 59), pill_rect, 12, 1)
+            else:
+                draw_rect_aa(screen, (229, 115, 115), pill_rect, 12, 1)
         else:
-            draw_rect_aa(screen, (229, 115, 115), pill_rect, 12, 1)
-    elif turn == my_color and not client_state['waiting'] and not history_active:
-        draw_rect_aa(screen, (80, 80, 90), pill_rect, 12, 1)
+            draw_rect_aa(screen, (80, 80, 90), pill_rect, 12, 1)
     screen.blit(st, st_rect)
 
     is_drafting = client_state.get('drafting', False)
@@ -2034,6 +2067,37 @@ def draw_text_center(screen, text, font, color, y_pos, cx=None):
 async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, screen, fonts):
     if not client_state.get('is_dragging_gesture'):
         return gs
+    
+    # Trigger drop ghost
+    p = client_state.get('drag_piece_name')
+    if p:
+        if 'dropped_ghosts' not in client_state:
+            client_state['dropped_ghosts'] = []
+        anim_t = client_state.get('drag_anim_t', 1.0)
+        dr_sq, dc_sq = client_state.get('drag_piece_sq', (0, 0))
+        flipped = client_state.get('flipped', False)
+        start_r = 7 - dr_sq if flipped else dr_sq
+        start_c = 7 - dc_sq if flipped else dc_sq
+        start_mx = start_c * SQ + SQ // 2
+        start_my = start_r * SQ + SQ
+        
+        ease = 1.0 - (1.0 - anim_t) * (1.0 - anim_t)
+        curr_mx = start_mx + (mx - start_mx) * ease
+        curr_my = start_my + (my - start_my) * ease
+        curr_scale = 1.0 + 1.5 * ease
+        
+        vx, vy = client_state.get('drag_vel', (0.0, 0.0))
+        angle = max(-35, min(35, vx * 1.5 * ease))
+        
+        client_state['dropped_ghosts'].append({
+            'p': p,
+            'mx': curr_mx,
+            'my': curr_my,
+            'scale': curr_scale,
+            'angle': angle,
+            't': 0.0,
+            'max_t': 0.1
+        })
 
     # drag_piece_sq is the clicked square (might be pub_pos)
     # selected is the true square resolved by get_ui_selection
@@ -2508,7 +2572,13 @@ async def game_loop():
         dt = clock.tick(FPS) / 1000.0
         await asyncio.sleep(0) # yield control so websocket background task won't drop pong packets
         
+        if 'dropped_ghosts' in client_state:
+            for g in client_state['dropped_ghosts']:
+                g['t'] += dt
+            client_state['dropped_ghosts'] = [g for g in client_state['dropped_ghosts'] if g['t'] < g['max_t']]
+        
         if client_state.get('is_dragging_gesture'):
+            client_state['drag_anim_t'] = min(1.0, client_state.get('drag_anim_t', 0.0) + dt * 6.0)
             if not client_state.get('predicting_mode'):
                 client_state['gesture_timer'] = client_state.get('gesture_timer', 0.0) + dt
                 client_state['gesture_stalled'] = False
@@ -3542,6 +3612,7 @@ async def game_loop():
                                 client_state['legal_sq'] = legs
                                 play_sound('select')
                                 client_state['is_dragging_gesture'] = True
+                                client_state['drag_anim_t'] = 0.0
                                 client_state['drag_piece_sq'] = (r, c)
                                 client_state['drag_piece_name'] = p_on_sq
                                 client_state['drag_pos'] = (mx, my)
@@ -3575,6 +3646,7 @@ async def game_loop():
                                 client_state['legal_sq'] = legs
                                 play_sound('select')
                                 client_state['is_dragging_gesture'] = True
+                                client_state['drag_anim_t'] = 0.0
                                 client_state['drag_piece_sq'] = (r, c)
                                 client_state['drag_piece_name'] = p_on_sq
                                 client_state['drag_pos'] = (mx, my)

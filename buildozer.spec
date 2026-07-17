@@ -34,6 +34,15 @@ fullscreen = 1
 # (list) Permissions
 android.permissions = INTERNET
 
+# (int) Target Android API, should be as high as possible.
+android.api = 34
+
+# (int) Minimum API your APK / AAB will support.
+android.minapi = 24
+
+# (int) Android NDK API to use
+android.ndk_api = 24
+
 # (bool) If True, then automatically accept SDK license
 android.accept_sdk_license = True
 
@@ -41,7 +50,7 @@ android.accept_sdk_license = True
 android.archs = arm64-v8a, armeabi-v7a
 
 # (str) python-for-android branch to use
-p4a.branch = develop
+# p4a.branch = develop
 
 [buildozer]
 

@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hidden Chess</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #121212;
+            color: #ffffff;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            text-align: center;
+        }
+        .container {
+            max-width: 600px;
+            padding: 2rem;
+            background-color: #1e1e1e;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+        h1 {
+            font-size: 3rem;
+            margin-bottom: 0.5rem;
+            letter-spacing: 2px;
+            color: #f0f0f0;
+        }
+        p {
+            font-size: 1.2rem;
+            color: #aaaaaa;
+            margin-bottom: 2rem;
+            line-height: 1.5;
+        }
+        .icon {
+            width: 200px;
+            height: 200px;
+            margin-bottom: 2rem;
+            border-radius: 20%;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.1);
+        }
+        .badge {
+            display: inline-block;
+            background-color: #2a2a2a;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            color: #4CAF50;
+            border: 1px solid #4CAF50;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <img src="icon.png" alt="Hidden Chess Icon" class="icon" onerror="this.style.display='none'">
+        <h1>Hidden Chess</h1>
+        <p>O jogo está configurado para execução via terminal local.<br>O modo preview via navegador exibe apenas esta capa.</p>
+        <div class="badge">Preview Web Desativado</div>
+    </div>
+</body>
+</html>

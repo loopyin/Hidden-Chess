@@ -5,7 +5,7 @@
   "main": "server.py",
   "scripts": {
     "build": "echo 'Building Hidden Chess...'",
-    "start": "python3 server.py",
+    "start": "npx serve -p 3000 .",
     "lint": "python3 -m compileall ."
   },
   "dependencies": {
