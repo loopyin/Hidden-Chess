@@ -761,9 +761,9 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         enemy_hidden[ghost_found] = PieceMetaModifier(pub_pos=None, piece=val.piece, path=val.path, is_fakeout=val.is_fakeout, fakeout_path=val.fakeout_path, plies=val.plies)
         # 3. Add to the log
         if is_f:
-            gs['log'].append(f"SYS_FAKEOUT|Ilusão desfeita em {alg(tc, tr)}!")
+            gs['log'].append(f"SYS_FAKEOUT|{gs['turn']}|Ilusão desfeita em {alg(tc, tr)}!")
         else:
-            gs['log'].append(f"SYS_HIDDEN|Ilusão desfeita em {alg(tc, tr)}!")
+            gs['log'].append(f"SYS_HIDDEN|{gs['turn']}|Ilusão desfeita em {alg(tc, tr)}!")
         # 4. Set the ghost_capture_flash coordinate
         gs['ghost_capture_flash'] = (tr, tc)
         gs['ghost_capture_type'] = 'fakeout' if is_f else 'hidden'
@@ -816,9 +816,9 @@ def exec_move(gs, fr, fc, tr, tc, hidden_move=False, promo=None):
         board[cr][cc] = hp
 
         if is_f:
-            gs['log'].append(f"SYS_FAKEOUT|Peça oculta avistada em {alg(cc, cr)}!")
+            gs['log'].append(f"SYS_FAKEOUT|{gs['turn']}|Peça oculta avistada em {alg(cc, cr)}!")
         else:
-            gs['log'].append(f"SYS_HIDDEN|Peça oculta avistada em {alg(cc, cr)}!")
+            gs['log'].append(f"SYS_HIDDEN|{gs['turn']}|Peça oculta avistada em {alg(cc, cr)}!")
         if 'reveal_flashes' not in gs:
             gs['reveal_flashes'] = []
         gs['reveal_flashes'].append([cr, cc, 'fakeout' if is_f else 'hidden'])
@@ -1237,19 +1237,21 @@ def serialize_state(gs, player_color=None, dgs=None, current_shadow_history=None
                     'drafted_turn': drafted_turn
                 })
         elif parts[0] == 'SYS_HIDDEN':
-            txt = parts[1]
+            color = parts[1] if len(parts) > 2 else gs['turn']
+            txt = parts[2] if len(parts) > 2 else parts[1]
             classified_entries.append({
                 'type': 'SYS_HIDDEN',
-                'color': player_color,
+                'color': color,
                 'text': txt,
                 'color_type': 'hidden',
                 'drafted_turn': drafted_turn
             })
         elif parts[0] == 'SYS_FAKEOUT':
-            txt = parts[1]
+            color = parts[1] if len(parts) > 2 else gs['turn']
+            txt = parts[2] if len(parts) > 2 else parts[1]
             classified_entries.append({
                 'type': 'SYS_FAKEOUT',
-                'color': player_color,
+                'color': color,
                 'text': txt,
                 'color_type': 'fakeout',
                 'drafted_turn': drafted_turn

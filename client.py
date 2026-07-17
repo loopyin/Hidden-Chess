@@ -155,9 +155,12 @@ def resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
         base_path = sys._MEIPASS
+        return os.path.join(base_path, relative_path)
     except Exception:
+        if hasattr(sys, 'getandroidapilevel') or 'ANDROID_ARGUMENT' in os.environ or 'ANDROID_BOOTLOGO' in os.environ:
+            return relative_path
         base_path = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_path, relative_path)
+        return os.path.join(base_path, relative_path)
 
 def load_fonts():
     font_path = resource_path(os.path.join("assets", "DejaVuSans.ttf"))
@@ -1735,9 +1738,16 @@ def draw_sidebar(screen, gs, fonts, client_state, mouse):
         turn_num = turn['number']
         entries = turn['entries']
         
-        w_entries = [e for e in entries if e['color'] == 'w' and e['type'] != 'SYSTEM']
-        b_entries = [e for e in entries if e['color'] == 'b' and e['type'] != 'SYSTEM']
+        w_entries_raw = [e for e in entries if e['color'] == 'w' and e['type'] != 'SYSTEM']
+        b_entries_raw = [e for e in entries if e['color'] == 'b' and e['type'] != 'SYSTEM']
         
+        flipped = client_state.get('flipped', False)
+        left_entries = b_entries_raw if flipped else w_entries_raw
+        right_entries = w_entries_raw if flipped else b_entries_raw
+        
+        left_color_code = 'b' if flipped else 'w'
+        right_color_code = 'w' if flipped else 'b'
+
         # Turn Square
         t_surf = fonts['pts'].render(str(turn_num), True, (245, 245, 220))
         t_rect = t_surf.get_rect(center=(cx, y + block_h // 2))
@@ -1746,11 +1756,11 @@ def draw_sidebar(screen, gs, fonts, client_state, mouse):
         pygame.draw.rect(screen, (30, 30, 35), sq_rect, border_radius=4)
         screen.blit(t_surf, t_rect)
         
-        # Draw White (Right to Left)
+        # Draw Left (Right to Left)
         wx = sq_rect.left - 10
         prev_e = None
         prev_brect = None
-        for i, e in enumerate(w_entries):
+        for i, e in enumerate(left_entries):
             txt = clean_text(e['text'])
             c = get_color(e['color_type'])
             
@@ -1777,7 +1787,7 @@ def draw_sidebar(screen, gs, fonts, client_state, mouse):
             if prev_e and ((prev_e.get('type') == 'HIDDEN' and e.get('type') == 'FAKEOUT') or (prev_e.get('type') == 'FAKEOUT' and e.get('type') == 'HIDDEN')):
                 pygame.draw.line(screen, (150, 150, 150), (brect.right, brect.centery), (prev_brect.left, prev_brect.centery), 2)
 
-            block_id = (turn_num, 'w', i)
+            block_id = (turn_num, left_color_code, i)
             client_state['draft_blocks'].append((brect, block_id))
 
             is_selected = client_state.get('selected_block') == block_id
@@ -1800,11 +1810,11 @@ def draw_sidebar(screen, gs, fonts, client_state, mouse):
             prev_e = e
             prev_brect = brect
         
-        # Draw Black (Left to Right)
+        # Draw Right (Left to Right)
         bx_start = sq_rect.right + 10
         prev_e = None
         prev_brect = None
-        for i, e in enumerate(b_entries):
+        for i, e in enumerate(right_entries):
             txt = clean_text(e['text'])
             c = get_color(e['color_type'])
             
@@ -1830,7 +1840,7 @@ def draw_sidebar(screen, gs, fonts, client_state, mouse):
             if prev_e and ((prev_e.get('type') == 'HIDDEN' and e.get('type') == 'FAKEOUT') or (prev_e.get('type') == 'FAKEOUT' and e.get('type') == 'HIDDEN')):
                 pygame.draw.line(screen, (150, 150, 150), (prev_brect.right, prev_brect.centery), (brect.left, brect.centery), 2)
             
-            block_id = (turn_num, 'b', i)
+            block_id = (turn_num, right_color_code, i)
             client_state['draft_blocks'].append((brect, block_id))
 
             is_selected = client_state.get('selected_block') == block_id
