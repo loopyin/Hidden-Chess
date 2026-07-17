@@ -43,6 +43,12 @@ android.archs = arm64-v8a, armeabi-v7a
 # (str) python-for-android branch to use
 p4a.branch = develop
 
+# (int) Target Android API, should be as high as possible.
+android.api = 34
+
+# (int) Minimum API your APK / AAB will support.
+android.minapi = 24
+
 [buildozer]
 
 # (int) Log level (0 = error only, 1 = info, 2 = debug (with command output))

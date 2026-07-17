@@ -4012,7 +4012,7 @@ async def game_loop():
         screen.fill(BG)
 
         if app_state == "SPLASH_LOGO":
-            screen.fill((0, 0, 0))
+            screen.fill((50, 50, 50))
             if 'splash_start' not in client_state:
                 client_state['splash_start'] = pygame.time.get_ticks()
                 try:
@@ -4025,7 +4025,9 @@ async def game_loop():
                         loaded_img = pygame.transform.smoothscale(loaded_img, (int(lw * scale), int(lh * scale)))
                     client_state['logo_img'] = loaded_img
                 except Exception as e:
+                    print(f"FAILED TO LOAD LOGO: {e}")
                     client_state['logo_img'] = pygame.Surface((200, 200), pygame.SRCALPHA)
+                    client_state['logo_err'] = str(e)
             
             t_ms = pygame.time.get_ticks() - client_state['splash_start']
             cx, cy = WIN_W // 2, WIN_H // 2
@@ -4045,6 +4047,10 @@ async def game_loop():
                         screen.blit(s_img, logo_rect)
                     else:
                         screen.blit(logo, logo_rect)
+                
+                if 'logo_err' in client_state:
+                    err_surf = fonts['title'].render(client_state['logo_err'], True, (255, 0, 0))
+                    screen.blit(err_surf, err_surf.get_rect(center=(cx, cy + 150)))
             else:
                 app_state = "INTRO_ANIM"
 
