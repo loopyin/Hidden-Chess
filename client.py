@@ -2499,10 +2499,9 @@ async def game_loop():
     error_msg = ""
     running = True
 
-    app_state = "INTRO_ANIM"
+    app_state = "SPLASH_LOGO"
     gs = make_state()
     client_state = {
-        'intro_start': pygame.time.get_ticks(),
         'my_color': None,
         'waiting': True,
         'flipped': False,
@@ -4011,6 +4010,43 @@ async def game_loop():
             break
 
         screen.fill(BG)
+
+        if app_state == "SPLASH_LOGO":
+            screen.fill((0, 0, 0))
+            if 'splash_start' not in client_state:
+                client_state['splash_start'] = pygame.time.get_ticks()
+                try:
+                    loaded_img = pygame.image.load("logo.png").convert_alpha()
+                    lw, lh = loaded_img.get_size()
+                    max_w = WIN_W * 0.8
+                    max_h = WIN_H * 0.8
+                    if lw > max_w or lh > max_h:
+                        scale = min(max_w / lw, max_h / lh)
+                        loaded_img = pygame.transform.smoothscale(loaded_img, (int(lw * scale), int(lh * scale)))
+                    client_state['logo_img'] = loaded_img
+                except Exception as e:
+                    client_state['logo_img'] = pygame.Surface((200, 200), pygame.SRCALPHA)
+            
+            t_ms = pygame.time.get_ticks() - client_state['splash_start']
+            cx, cy = WIN_W // 2, WIN_H // 2
+
+            if t_ms < 7000:
+                logo = client_state['logo_img']
+                alpha = 255
+                if t_ms >= 6000:
+                    alpha = int(255 * (1.0 - (t_ms - 6000) / 1000.0))
+                    alpha = max(0, min(255, alpha))
+                
+                if alpha > 0:
+                    logo_rect = logo.get_rect(center=(cx, cy))
+                    if alpha < 255:
+                        s_img = logo.copy()
+                        s_img.fill((255, 255, 255, alpha), special_flags=pygame.BLEND_RGBA_MULT)
+                        screen.blit(s_img, logo_rect)
+                    else:
+                        screen.blit(logo, logo_rect)
+            else:
+                app_state = "INTRO_ANIM"
 
         if app_state == "INTRO_ANIM":
             screen.fill((0, 0, 0))

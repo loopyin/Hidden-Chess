@@ -34,16 +34,6 @@ fullscreen = 1
 # (list) Permissions
 android.permissions = INTERNET
 
-# (int) Target Android API, should be as high as possible.
-android.api = 34
-
-# (int) Minimum API your APK / AAB will support.
-android.minapi = 24
-
-# (int) Android NDK API to use
-android.ndk_api = 24
-android.ndk = 25b
-
 # (bool) If True, then automatically accept SDK license
 android.accept_sdk_license = True
 
