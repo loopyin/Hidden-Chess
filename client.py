@@ -151,16 +151,92 @@ def draw_fancy_btn(screen, text, font, base_color, hover_color, text_color, rect
     ts = font.render(text, True, text_color)
     screen.blit(ts, ts.get_rect(center=rect.center))
 
-def resource_path(relative_path):
-    """ Get absolute path to resource, works for dev and for PyInstaller """
+_RESOURCE_ROOTS = []
+_RESOURCE_PATHS_REGISTERED = False
+
+
+def _candidate_resource_roots():
+    roots = []
+    seen = set()
+
+    def add(path):
+        if not path:
+            return
+        path = os.path.abspath(path)
+        if path not in seen and os.path.isdir(path):
+            seen.add(path)
+            roots.append(path)
+
+    add(os.getcwd())
+    add(os.path.dirname(os.path.abspath(__file__)))
+    add(os.path.dirname(os.path.abspath(sys.argv[0])))
+
+    for root in list(roots):
+        add(os.path.join(root, 'assets'))
+
+    return roots
+
+
+def _register_resource_paths():
+    global _RESOURCE_ROOTS, _RESOURCE_PATHS_REGISTERED
+    if _RESOURCE_PATHS_REGISTERED:
+        return
+
+    _RESOURCE_ROOTS = _candidate_resource_roots()
     try:
-        base_path = sys._MEIPASS
-        return os.path.join(base_path, relative_path)
+        from kivy.resources import resource_add_path
     except Exception:
-        if hasattr(sys, 'getandroidapilevel') or 'ANDROID_ARGUMENT' in os.environ or 'ANDROID_BOOTLOGO' in os.environ:
-            return relative_path
-        base_path = os.path.dirname(os.path.abspath(__file__))
-        return os.path.join(base_path, relative_path)
+        resource_add_path = None
+
+    if resource_add_path is not None:
+        for root in _RESOURCE_ROOTS:
+            try:
+                resource_add_path(root)
+            except Exception:
+                pass
+            assets_dir = os.path.join(root, 'assets')
+            if os.path.isdir(assets_dir):
+                try:
+                    resource_add_path(assets_dir)
+                except Exception:
+                    pass
+
+    _RESOURCE_PATHS_REGISTERED = True
+
+
+def resource_path(relative_path):
+    """Resolve project assets on desktop and Android without hardcoding absolute paths."""
+    _register_resource_paths()
+    relative_path = relative_path.replace('\\', os.sep).replace('/', os.sep)
+
+    try:
+        from kivy.resources import resource_find
+    except Exception:
+        resource_find = None
+
+    if resource_find is not None:
+        try:
+            found = resource_find(relative_path)
+            if found:
+                return found
+        except Exception:
+            pass
+
+    if os.path.isabs(relative_path) and os.path.exists(relative_path):
+        return relative_path
+
+    for root in _RESOURCE_ROOTS:
+        candidate = os.path.join(root, relative_path)
+        if os.path.exists(candidate):
+            return candidate
+
+        if relative_path.startswith('assets' + os.sep):
+            alt = os.path.join(root, relative_path[len('assets' + os.sep):])
+            if os.path.exists(alt):
+                return alt
+
+    return relative_path
+
 
 def load_fonts():
     font_path = resource_path(os.path.join("assets", "DejaVuSans.ttf"))
@@ -187,6 +263,7 @@ def load_fonts():
         small=get_font(12), big=get_font(15, True),
         pts=get_font(14, True), title=get_font(40, True)
     )
+
 
 def registrar_proximo_lance_auto(gs, client_state):
     h_active = client_state.get('history_active', False)
@@ -231,42 +308,61 @@ def registrar_proximo_lance_auto(gs, client_state):
 IMAGES = {}
 SOUNDS = {}
 
+
+def _clear_asset_cache():
+    IMAGES.clear()
+    SOUNDS.clear()
+
+
+def _theme_image_names():
+    return ['wP', 'wR', 'wN', 'wB', 'wQ', 'wK', 'bP', 'bR', 'bN', 'bB', 'bQ', 'bK']
+
+
+def _load_image(path, alpha=True):
+    img = pygame.image.load(path)
+    return img.convert_alpha() if alpha else img.convert()
+
+
 def load_assets(theme_name="classic"):
-    images_dir = resource_path(os.path.join("assets", "themes", theme_name.lower()))
+    _clear_asset_cache()
+    _register_resource_paths()
+
+    theme_dir = resource_path(os.path.join("assets", "themes", theme_name.lower()))
     sounds_dir = resource_path(os.path.join("assets", "sounds"))
-    
-    if os.path.exists(images_dir):
-        for bp in ['wP', 'wR', 'wN', 'wB', 'wQ', 'wK', 'bP', 'bR', 'bN', 'bB', 'bQ', 'bK']:
-            img_path = os.path.join(images_dir, f"{bp}.png")
+
+    if os.path.isdir(theme_dir):
+        for bp in _theme_image_names():
+            img_path = resource_path(os.path.join(theme_dir, f"{bp}.png"))
             if os.path.exists(img_path):
                 try:
-                    img = pygame.image.load(img_path).convert_alpha()
+                    img = _load_image(img_path, alpha=True)
                     IMAGES[bp] = pygame.transform.smoothscale(img, (SQ, SQ))
-                except:
+                except Exception:
                     pass
-        
-        board_path = os.path.join(images_dir, "board.png")
+
+        board_path = resource_path(os.path.join(theme_dir, "board.png"))
         if os.path.exists(board_path):
             try:
-                img = pygame.image.load(board_path).convert()
+                img = _load_image(board_path, alpha=False)
                 IMAGES['board'] = pygame.transform.smoothscale(img, (BOARD_PX, BOARD_PX))
-            except:
+            except Exception:
                 pass
-                    
+
     try:
         pygame.mixer.init()
-        if os.path.exists(sounds_dir):
+        if os.path.isdir(sounds_dir):
             for sx in ['move', 'capture', 'check', 'game_over', 'hidden', 'hidden_off', 'fakeout', 'fakeout_off', 'click', 'select', 'toggle', 'start', 'resign', 'next', 'end', 'next_move', 'spotted', 'fakeout_spotted', 'menu', 'freeze', 'unfreeze', 'error']:
                 for ext in ['.wav', '.ogg', '.raw']:
-                    snd_path = os.path.join(sounds_dir, f"{sx}{ext}")
+                    snd_path = resource_path(os.path.join(sounds_dir, f"{sx}{ext}"))
                     if os.path.exists(snd_path):
                         try:
                             SOUNDS[sx] = pygame.mixer.Sound(snd_path)
                             break
-                        except:
+                        except Exception:
                             pass
-    except:
+    except Exception:
         pass
+
 
 def play_sound(snd_name):
     if snd_name in SOUNDS:
