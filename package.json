@@ -5,7 +5,8 @@
   "main": "server.py",
   "scripts": {
     "build": "echo 'Building Hidden Chess...'",
-    "start": "pip install pygbag --break-system-packages && python3 -m pygbag --bind 0.0.0.0 --port 3000 .",
+    "start": "python3 -m pip install pygbag --break-system-packages && python3 -m pygbag --bind 0.0.0.0 --port 3000 .",
+    "dev": "python3 -m pip install pygbag --break-system-packages && python3 -m pygbag --bind 0.0.0.0 --port 3000 .",
     "lint": "python3 -m compileall ."
   },
   "dependencies": {

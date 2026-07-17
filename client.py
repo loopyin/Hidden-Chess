@@ -228,8 +228,8 @@ def registrar_proximo_lance_auto(gs, client_state):
 IMAGES = {}
 SOUNDS = {}
 
-def load_assets():
-    images_dir = resource_path(os.path.join("assets", "images"))
+def load_assets(theme_name="classic"):
+    images_dir = resource_path(os.path.join("assets", "themes", theme_name.lower()))
     sounds_dir = resource_path(os.path.join("assets", "sounds"))
     
     if os.path.exists(images_dir):
@@ -2368,7 +2368,9 @@ async def game_loop():
         gs['fakeout_mode_enabled'] = True
         gs['score_to_win'] = True
         gs['ice_king_enabled'] = True
+        current_t = client_state.get('theme', 'Classic')
         client_state = {
+            'theme': current_t,
             'my_color': 'w',
             'waiting': False,
             'flipped': False,
@@ -2839,7 +2841,9 @@ async def game_loop():
                         play_sound('click')
                         app_state = "CONNECTING"
                         gs = make_state()
+                        current_t = client_state.get('theme', 'Classic')
                         client_state = {
+                            'theme': current_t,
                             'my_color': None,
                             'waiting': True,
                             'flipped': False,
@@ -2899,7 +2903,9 @@ async def game_loop():
                             try: pygame.key.stop_text_input()
                             except: pass
                             gs = make_state()
+                            current_t = client_state.get('theme', 'Classic')
                             client_state = {
+                                'theme': current_t,
                                 'my_color': None, 'waiting': True, 'flipped': False,
                                 'selected': None, 'legal_sq': [], 'room_code': None,
                                 'is_typing': False, 'msg_queue': deque(),
@@ -2953,7 +2959,9 @@ async def game_loop():
                                     print("Erro ao carregar o replay:", err)
                                     loaded_history = [deserialize_state(data)]
                                 gs = loaded_history[0] if loaded_history else deserialize_state(data)
+                                current_t = client_state.get('theme', 'Classic')
                                 client_state = {
+                                    'theme': current_t,
                                     'my_color': data.get('player_color', 'w'),
                                     'waiting': False,
                                     'flipped': False,
@@ -3194,6 +3202,7 @@ async def game_loop():
                              current_theme = client_state.get('theme', 'Classic')
                              new_theme = 'Wood' if current_theme == 'Classic' else 'Classic'
                              client_state['theme'] = new_theme
+                             load_assets(new_theme)
                              play_sound('toggle')
                              continue
                             
