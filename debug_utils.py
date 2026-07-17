@@ -1,3 +1,5 @@
+import logging
+
 # Debugging utilities for invariant checks and logging of game state
 def check_invariants(gs):
     # 1. Turn is valid
@@ -20,9 +22,9 @@ def check_invariants(gs):
     b_king_found = any('bK' in str(p) for row in tb_b for p in row)
     
     if not w_king_found:
-        print(f"WARNING [Invariant]: White King missing in turn {turn_count}")
+        logging.warning(f"WARNING [Invariant]: White King missing in turn {turn_count}")
     if not b_king_found:
-        print(f"WARNING [Invariant]: Black King missing in turn {turn_count}")
+        logging.warning(f"WARNING [Invariant]: Black King missing in turn {turn_count}")
 
     # 3. Hidden invariants: If a piece is actively hiding (not fakeout), its true position should not be on the public board.
     # Actually 'pub_pos' is where the fake/shadow piece is left.
@@ -46,5 +48,5 @@ def log_minimal_snapshot(gs, action_name):
     hidden_count = gs.get('hidden_count', 0)
     draft_count = len(gs.get(f'next_queue_{turn}', []))
     
-    print(f"[DEBUG] Turn={turn_count}({turn}) Action={action_name} " 
+    logging.info(f"[DEBUG] Turn={turn_count}({turn}) Action={action_name} " 
           f"PTS={{w:{pts_w}, b:{pts_b}}} HiddenCount={hidden_count} DraftCount={draft_count}")

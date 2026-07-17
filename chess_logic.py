@@ -326,6 +326,7 @@ def make_state():
         pts={'w': 0, 'b': 0},
         time_left={'w': 600, 'b': 600},
         game_started=False,
+        state_history=[],
         hidden_w={},
         hidden_b={},
         shadow_history={},
@@ -651,8 +652,10 @@ def process_next_queues(gs, max_moves=None):
                     break
             else:
                 gs['pts'][c] = round(gs['pts'][c] - 1, 2)
+                htxt = "[Fakeout] " if action.fakeout else "[Sombra] " if action.hidden else ""
+                m_text = f"{htxt}{alg(action.fc, action.fr)}-{alg(action.tc, action.tr)}"
                 if action.hidden:
-                    note_msg = "Lance inválido. Turno manual iniciado."
+                    note_msg = f"Lance inválido: {m_text}"
                     gs['log'].append(f"HIDDEN|{c}|{note_msg}|0{dt_suffix}")
                     ply_idx = len(gs['log'])
                     if 'shadow_history' not in gs:
@@ -664,9 +667,9 @@ def process_next_queues(gs, max_moves=None):
                         'active': True
                     }
                 elif action.fakeout:
-                    gs['log'].append(f"FAKEOUT|{c}|Lance inválido. Turno manual iniciado.{dt_suffix}")
+                    gs['log'].append(f"FAKEOUT|{c}|Lance inválido: {m_text}{dt_suffix}")
                 else:
-                    gs['log'].append(f"NORMAL|{c}|Lance inválido. Turno manual iniciado.{dt_suffix}")
+                    gs['log'].append(f"NORMAL|{c}|Lance inválido: {m_text}{dt_suffix}")
 
                 if not action.hidden and not action.fakeout:
                     gs['normal_done'] = False
@@ -695,12 +698,10 @@ def ice_king_interaction(gs, kr, kc, tr, tc):
     if (tr, tc) in frozen:
         frozen.remove((tr, tc))
         gs['pts'][c] = round(gs['pts'][c] - val, 2)
-        gs['log'].append(f"ICE|{c}| O rei descongelou {alg(tc, tr)} (-{val}pt)")
         res = 'unfrozen'
     else:
         frozen.add((tr, tc))
         gs['pts'][c] = round(gs['pts'][c] + val, 2)
-        gs['log'].append(f"ICE|{c}| O rei congelou {alg(tc, tr)} (+{val}pt)")
         res = 'frozen'
         
     gs['fakeout_active'] = False
@@ -1072,7 +1073,7 @@ def get_ui_selection(gs, r, c, draft_moves=None):
                 return (r, c), legals
             return None, []
 
-def serialize_state(gs, player_color=None, dgs=None):
+def serialize_state(gs, player_color=None, dgs=None, current_shadow_history=None):
     def convert_hidden(hd):
         return {f"{k[0]},{k[1]}": (
             list(v.pub_pos) if v.pub_pos else None,
@@ -1100,19 +1101,27 @@ def serialize_state(gs, player_color=None, dgs=None):
     filtered_log = []
     classified_entries = []
     normal_moves_count = 0
-    for idx, entry in enumerate(gs['log']):
+    w_in_hidden_turn = False
+    target_log_gs = dgs if dgs else gs
+    for idx, entry in enumerate(target_log_gs['log']):
         if isinstance(entry, dict):
-            classified_entries.append({
-                'type': entry.get('type', 'SYSTEM'),
-                'color': 'system',
-                'text': entry.get('text', ''),
-                'color_type': entry.get('color_type', 'system'),
-                'drafted_turn': None
-            })
-            filtered_log.append(entry)
+            classified_entries.append(entry)
             continue
             
         parts = entry.split('|')
+        
+        if len(parts) > 1 and parts[1] == 'b':
+            w_in_hidden_turn = False
+        if len(parts) > 1 and parts[0] in ('ICE', 'NEXT', 'NORMAL') and parts[1] == 'w':
+            w_in_hidden_turn = False
+        
+        # RESET logic for w_in_hidden_turn
+        if len(parts) > 1 and parts[0] in ('NORMAL', 'ICE', 'NEXT'):
+            if parts[1] == 'w':
+                pass # wait, NORMAL is handled inside. ICE/NEXT we should handle.
+        if len(parts) > 1 and parts[1] == 'b':
+            w_in_hidden_turn = False
+
         ply_idx = idx + 1
         is_active = True
         shadow_hist = gs.get('shadow_history', {})
@@ -1128,15 +1137,12 @@ def serialize_state(gs, player_color=None, dgs=None):
                 drafted_turn = int(last_part[1:])
                 parts.pop()
 
-        if drafted_turn is not None and len(parts) > 1:
-            if parts[0] in ('HIDDEN', 'FAKEOUT', 'NORMAL', 'NEXT', 'ICE'):
-                if player_color not in ('server', parts[1]):
-                    drafted_turn = None
+        # Drafted turn info already extracted
 
         if parts[0] == 'HIDDEN':
             color, note = parts[1], parts[2]
             cost = parts[3] if len(parts) > 3 else "0"
-            if "Lance inválido. Turno manual iniciado." in note:
+            if "Lance inválido" in note or "Lance abandonado" in note:
                 if color == player_color:
                     classified_entries.append({
                         'type': 'NEXT_CANCELLED',
@@ -1145,28 +1151,41 @@ def serialize_state(gs, player_color=None, dgs=None):
                         'color_type': 'next_cancelled',
                         'drafted_turn': drafted_turn
                     })
-            elif color == player_color:
-                txt = f"{note} (-{cost}pt)"
-                classified_entries.append({
-                    'type': 'HIDDEN',
-                    'color': color,
-                    'text': txt,
-                    'color_type': 'draft_hidden' if drafted_turn else 'hidden',
-                    'drafted_turn': drafted_turn
-                })
-            elif not is_active or gs.get('game_over', False):
-                txt = f"{note}"
-                classified_entries.append({
-                    'type': 'HIDDEN',
-                    'color': color,
-                    'text': txt,
-                    'color_type': 'revealed',
-                    'drafted_turn': drafted_turn
-                })
+            else:
+                if color == 'w':
+                    if not w_in_hidden_turn:
+                        normal_moves_count += 1
+                        w_in_hidden_turn = True
+                    prefix = f"{normal_moves_count}. "
+                else:
+                    prefix = "    "
+                    
+                if color == player_color:
+                    txt = f"{prefix}{note}"
+                    ent = {
+                        'type': 'HIDDEN',
+                        'color': color,
+                        'text': txt,
+                        'color_type': 'draft_hidden' if drafted_turn else 'hidden',
+                        'drafted_turn': drafted_turn
+                    }
+                    if color == 'w': ent['move_num'] = normal_moves_count
+                    classified_entries.append(ent)
+                elif not is_active or gs.get('game_over', False):
+                    txt = f"{prefix}{note}"
+                    ent = {
+                        'type': 'HIDDEN',
+                        'color': color,
+                        'text': txt,
+                        'color_type': 'revealed',
+                        'drafted_turn': drafted_turn
+                    }
+                    if color == 'w': ent['move_num'] = normal_moves_count
+                    classified_entries.append(ent)
         elif parts[0] == 'FAKEOUT':
             color, note = parts[1], parts[2]
             cost = parts[3] if len(parts) > 3 else "0"
-            if "Lance inválido. Turno manual iniciado." in note:
+            if "Lance inválido" in note or "Lance abandonado" in note:
                 if color == player_color:
                     classified_entries.append({
                         'type': 'NEXT_CANCELLED',
@@ -1175,37 +1194,37 @@ def serialize_state(gs, player_color=None, dgs=None):
                         'color_type': 'next_cancelled',
                         'drafted_turn': drafted_turn
                     })
-            elif color == player_color:
-                txt = f"{note} (-{cost}pt)"
-                classified_entries.append({
-                    'type': 'FAKEOUT',
-                    'color': color,
-                    'text': txt,
-                    'color_type': 'draft_fakeout' if drafted_turn else 'fakeout',
-                    'drafted_turn': drafted_turn
-                })
             else:
                 display_note = note.replace("[Fakeout] ", "")
                 if color == 'w':
-                    normal_moves_count += 1
-                    txt = f"{normal_moves_count}. {display_note}"
-                    classified_entries.append({
-                        'type': 'FAKEOUT',
-                        'color': color,
-                        'text': txt,
-                        'color_type': 'white_move',
-                        'move_num': normal_moves_count,
-                        'drafted_turn': drafted_turn
-                    })
+                    if not w_in_hidden_turn:
+                        normal_moves_count += 1
+                    prefix = f"{normal_moves_count}. "
                 else:
-                    txt = f"    {display_note}"
-                    classified_entries.append({
+                    prefix = "    "
+
+                if color == player_color:
+                    txt = f"{prefix}{display_note}"
+                    ent = {
                         'type': 'FAKEOUT',
                         'color': color,
                         'text': txt,
-                        'color_type': 'black_move',
+                        'color_type': 'draft_fakeout' if drafted_turn else 'fakeout',
                         'drafted_turn': drafted_turn
-                    })
+                    }
+                    if color == 'w': ent['move_num'] = normal_moves_count
+                    classified_entries.append(ent)
+                else:
+                    txt = f"{prefix}{display_note}"
+                    ent = {
+                        'type': 'FAKEOUT',
+                        'color': color,
+                        'text': txt,
+                        'color_type': 'white_move' if (color == 'w' and is_active) else ('black_move' if (color == 'b' and is_active) else 'fakeout'),
+                        'drafted_turn': drafted_turn
+                    }
+                    if color == 'w': ent['move_num'] = normal_moves_count
+                    classified_entries.append(ent)
         elif parts[0] == 'PRIVATE_SYS':
             color, note = parts[1], parts[2]
             if color == player_color:
@@ -1237,7 +1256,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             })
         elif parts[0] == 'NORMAL':
             color, note = parts[1], parts[2]
-            if "Lance inválido. Turno manual iniciado." in note:
+            if "Lance inválido" in note or "Lance abandonado" in note:
                 classified_entries.append({
                     'type': 'NEXT_CANCELLED',
                     'color': color,
@@ -1248,6 +1267,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             else:
                 if color == 'w':
                     normal_moves_count += 1
+                    w_in_hidden_turn = False
                     txt = f"{normal_moves_count}. {note}"
                     classified_entries.append({
                         'type': 'NORMAL',
@@ -1278,7 +1298,7 @@ def serialize_state(gs, player_color=None, dgs=None):
         elif parts[0] == 'ICE':
             color, note = parts[1], parts[2]
             classified_entries.append({
-                'type': 'ICE',
+                'type': 'SYSTEM',
                 'color': color,
                 'text': note,
                 'color_type': 'system',
@@ -1322,6 +1342,9 @@ def serialize_state(gs, player_color=None, dgs=None):
         return True
 
     for entry in classified_entries:
+        if entry.get('type') == 'SYSTEM':
+            continue
+            
         ent_color = entry.get('color')
         
         if current_turn is None:
@@ -1336,16 +1359,26 @@ def serialize_state(gs, player_color=None, dgs=None):
             if ent_color in ('w', 'b') and is_real_move(entry):
                 should_split = False
                 if ent_color == 'w':
-                    if any(existing.get('color') in ('w', 'b') and is_real_move(existing) for existing in current_turn['entries']):
-                        should_split = True
+                    existing_real = [ex for ex in current_turn['entries'] if ex.get('color') in ('w', 'b') and is_real_move(ex)]
+                    if existing_real:
+                        if entry.get('type') == 'FAKEOUT' and all(ex.get('color') == 'w' and ex.get('type') == 'HIDDEN' for ex in existing_real):
+                            should_split = False
+                        else:
+                            should_split = True
                 elif ent_color == 'b':
-                    if any(existing.get('color') == 'b' and is_real_move(existing) for existing in current_turn['entries']):
-                        should_split = True
+                    existing_real = [ex for ex in current_turn['entries'] if ex.get('color') == 'b' and is_real_move(ex)]
+                    if existing_real:
+                        if entry.get('type') == 'FAKEOUT' and all(ex.get('type') == 'HIDDEN' for ex in existing_real):
+                            should_split = False
+                        else:
+                            should_split = True
 
                 if should_split:
                     turns.append(current_turn)
                     prev_num = current_turn['number']
-                    next_num = entry.get('move_num', prev_num + 1)
+                    # Ensure next_num is strictly greater than prev_num so they don't merge back
+                    e_num = entry.get('move_num', prev_num + 1)
+                    next_num = max(e_num, prev_num + 1)
                     current_turn = {
                         'number': next_num,
                         'entries': []
@@ -1388,6 +1421,7 @@ def serialize_state(gs, player_color=None, dgs=None):
                 
         final_turns = []
         for t_num in sorted(redistributed_entries.keys()):
+            redistributed_entries[t_num].sort(key=lambda e: 0 if e.get('type') == 'NEXT_CANCELLED' else 1)
             if t_num in turns_map or redistributed_entries[t_num]:
                 final_turns.append({
                     'number': t_num,
@@ -1401,8 +1435,37 @@ def serialize_state(gs, player_color=None, dgs=None):
     elif player_color == 'b':
         safe_pts['w'] = '?'
 
-    hidden_w_safe = convert_hidden(gs['hidden_w']) if player_color in ('w', 'server') else {}
-    hidden_b_safe = convert_hidden(gs['hidden_b']) if player_color in ('b', 'server') else {}
+    cur_sh = gs.get('shadow_history', {}) if current_shadow_history is None else current_shadow_history
+    
+    b_ret = cpb(gs['board'])
+    hidden_w_full = convert_hidden(gs['hidden_w'])
+    hidden_b_full = convert_hidden(gs['hidden_b'])
+
+    def bake_revealed_safe(hd_safe):
+        for t_pos_str, val in hd_safe.items():
+            tr, tc = map(int, t_pos_str.split(','))
+            pub_pos = val[0]
+            piece = val[1]
+            plies = val[5]
+            
+            is_revealed = False
+            for p_idx in plies:
+                if p_idx in cur_sh and not cur_sh[p_idx].get('active', True):
+                    is_revealed = True; break
+                elif str(p_idx) in cur_sh and not cur_sh[str(p_idx)].get('active', True):
+                    is_revealed = True; break
+            
+            if is_revealed:
+                if pub_pos: b_ret[pub_pos[0]][pub_pos[1]] = None
+                b_ret[tr][tc] = piece
+
+    if player_color not in ('w', 'server') and not gs.get('game_over', False):
+        bake_revealed_safe(hidden_w_full)
+    if player_color not in ('b', 'server') and not gs.get('game_over', False):
+        bake_revealed_safe(hidden_b_full)
+
+    hidden_w_safe = hidden_w_full if player_color in ('w', 'server') or gs.get('game_over', False) else {}
+    hidden_b_safe = hidden_b_full if player_color in ('b', 'server') or gs.get('game_over', False) else {}
 
     shadow_history_safe = {}
     for ply, info in gs.get('shadow_history', {}).items():
@@ -1411,7 +1474,7 @@ def serialize_state(gs, player_color=None, dgs=None):
             shadow_history_safe[ply_str] = info
 
     ret = {
-        'board': gs['board'],
+        'board': b_ret,
         'turn': gs['turn'],
         'ep': list(gs['ep']) if gs['ep'] else None,
         'cr': gs['cr'],

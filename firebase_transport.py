@@ -116,6 +116,10 @@ class MockWebsocket:
                     needs_broadcast = True
                 elif action == 'start_game' and color == 'w' and gs.get('opponent_joined', False):
                     gs['game_started'] = True
+                    clean_snap = copy.deepcopy(gs)
+                    clean_snap.pop('turn_start_snapshot', None)
+                    clean_snap.pop('state_history', None)
+                    gs.setdefault('state_history', []).append(clean_snap)
                     needs_broadcast = True
                 elif action == 'rematch_request':
                     gs['rematch_requested_by'] = color
@@ -127,6 +131,10 @@ class MockWebsocket:
                     new_state['online'] = gs.get('online', {'w': True, 'b': True})
                     new_state['opponent_joined'] = True
                     new_state['game_started'] = True
+                    clean_snap = copy.deepcopy(new_state)
+                    clean_snap.pop('turn_start_snapshot', None)
+                    clean_snap.pop('state_history', None)
+                    new_state.setdefault('state_history', []).append(clean_snap)
                     new_state['turn_start_snapshot'] = copy.deepcopy(new_state)
                     self.gs = new_state
                     gs = self.gs
@@ -166,6 +174,24 @@ class MockWebsocket:
                                     gs['pts'][color] = round(gs['pts'][color] + 1, 2)
                                 else:
                                     gs['pts'][color] = round(gs['pts'][color] - 1, 2)
+                                    for m in next_a:
+                                        if m.get('type') == 'move':
+                                            c_t = color
+                                            from chess_logic import alg
+                                            htxt = "[Fakeout] " if m.get('fakeout') else "[Sombra] " if m.get('hidden') else ""
+                                            dt_suffix = f"|t{m.get('drafted_turn')}" if m.get('drafted_turn') is not None else ""
+                                            m_text = f"{htxt}{alg(m['fc'], m['fr'])}-{alg(m['tc'], m['tr'])}"
+                                            if m.get('hidden'):
+                                                note_msg = f"Lance abandonado: {m_text}"
+                                                gs['log'].append(f"HIDDEN|{c_t}|{note_msg}|0{dt_suffix}")
+                                                ply_idx = len(gs['log'])
+                                                if 'shadow_history' not in gs: gs['shadow_history'] = {}
+                                                gs['shadow_history'][ply_idx] = {'type': 'HIDDEN', 'color': c_t, 'note': note_msg, 'active': True}
+                                            elif m.get('fakeout'):
+                                                gs['log'].append(f"FAKEOUT|{c_t}|Lance abandonado: {m_text}{dt_suffix}")
+                                            else:
+                                                gs['log'].append(f"NORMAL|{c_t}|Lance abandonado: {m_text}{dt_suffix}")
+
                                 pop_next_turn_from_queue(gs, color)
 
                             if dm:
@@ -194,6 +220,9 @@ class MockWebsocket:
                         clean_snapshot = copy.deepcopy(gs)
                         clean_snapshot.pop('turn_start_snapshot', None)
                         gs['turn_start_snapshot'] = clean_snapshot
+                        clean_hist_snap = copy.deepcopy(clean_snapshot)
+                        clean_hist_snap.pop('state_history', None)
+                        gs.setdefault('state_history', []).append(clean_hist_snap)
                         needs_broadcast = True
                         gs['ghost_capture_flash'] = None
                         gs['ghost_capture_type'] = None

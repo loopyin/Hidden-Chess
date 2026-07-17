@@ -41,13 +41,25 @@ def transition_draft_turn(dgs):
     dgs['hidden_mode'] = False
     dgs['moved_this_turn'] = set()
 
-def get_draft_state(gs, draft_moves):
+def get_draft_state(gs, draft_moves, player_color=None):
     """
     Receives the real game state and a list of draft moves.
     Produces a simulated future state without modifying the real one.
     """
     import copy
     dgs = copy.deepcopy(gs)
+    from chess_logic import opp
+    
+    if player_color and dgs['turn'] != player_color:
+        dgs['turn'] = opp(dgs['turn'])
+        dgs['turn_count'] += 1
+        dgs['normal_done'] = False
+        dgs['hidden_count'] = 0
+        dgs['fakeout_count'] = 0
+        dgs['fakeout_used'] = False
+        dgs['fakeout_active'] = False
+        dgs['hidden_mode'] = False
+        dgs['moved_this_turn'] = set()
     
     # If the player finished their real actions, the draft
     # represents actions starting from their SUBSEQUENT turn.
@@ -64,7 +76,7 @@ def get_draft_state(gs, draft_moves):
             action = MovePiece(
                 fr=dm['fr'], fc=dm['fc'], tr=dm['tr'], tc=dm['tc'],
                 hidden=dm.get('hidden', False), promo=dm.get('promo'),
-                fakeout=dm.get('fakeout', False)
+                fakeout=dm.get('fakeout', False), drafted_turn=dm.get('drafted_turn')
             )
             
         if isinstance(action, EndTurn):

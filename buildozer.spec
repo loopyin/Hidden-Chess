@@ -1,7 +1,7 @@
 [app]
 icon.filename = %(source.dir)s/icon.png
 presplash.filename = %(source.dir)s/empty_presplash.png
-android.presplash_color = #161618
+android.presplash_color = #000000
 
 # (str) Title of your application
 title = Hidden Chess
