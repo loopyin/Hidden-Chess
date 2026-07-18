@@ -326,6 +326,8 @@ class MockWebsocket:
                                             'promo': promo, 'hidden': is_hidden,
                                             'fakeout': is_fakeout
                                         })
+                                        gs['hidden_mode'] = False
+                                        gs['fakeout_active'] = False
                                     needs_broadcast = True
                                     gs['ghost_capture_flash'] = None
                                     gs['ghost_capture_type'] = None

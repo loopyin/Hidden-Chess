@@ -2241,7 +2241,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                     if val.pub_pos == (sr, sc):
                         p = val.piece
                         break
-            is_fakeout_active_now = client_state.get('draft_fakeout', False) if client_state.get('drafting') else gs.get('fakeout_active', False)
+            is_fakeout_active_now = client_state.get('draft_fakeout', False) if client_state.get('drafting') else (gs.get('fakeout_active', False) or client_state.get('casca_auto_fakeout', False) or client_state.get('fakeout_triggered', False))
             if is_casca_drag and not is_fakeout_active_now:
                 play_sound('error')
                 trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
@@ -2256,7 +2256,7 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
             if p and pt(p) == 'P' and r in (0, 7):
                 promo = await ask_promo(screen, fonts, gs['turn'], websocket, client_state)
 
-            is_auto_draft = not client_state.get('drafting') and gs.get('hidden_count', 0) > 0 and not (gs.get('fakeout_active', False) or client_state.get('fakeout_triggered', False))
+            is_auto_draft = not client_state.get('drafting') and gs.get('hidden_count', 0) > 0 and not (gs.get('fakeout_active', False) or client_state.get('fakeout_triggered', False) or client_state.get('casca_auto_fakeout', False))
             if client_state.get('drafting') or is_auto_draft:
                 if is_auto_draft:
                     client_state['drafting'] = True
@@ -2392,6 +2392,8 @@ async def handle_gesture_release(mx, my, client_state, gs, is_local, websocket, 
                     await websocket.send(json.dumps(move_cmd))
                     client_state['selected'] = None
                     client_state['legal_sq'] = []
+                    gs['hidden_mode'] = False
+                    gs['fakeout_active'] = False
             
             client_state['is_dragging_gesture'] = False
             
@@ -2607,6 +2609,11 @@ async def game_loop():
                         if client_state.get('drafting'):
                             gs_temp['fakeout_active'] = client_state.get('draft_fakeout', False)
                             gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
+                        else:
+                            if client_state.get('casca_auto_fakeout', False) or client_state.get('fakeout_triggered', False):
+                                gs_temp['fakeout_active'] = True
+                            if client_state.get('hidden_triggered', False):
+                                gs_temp['hidden_mode'] = True
                         sel, legs = get_ui_selection(gs_temp, sr, sc, draft_moves=client_state.get('draft_moves', []))
                         if sel is not None:
                             client_state['selected'] = sel
@@ -2634,6 +2641,11 @@ async def game_loop():
                     if client_state.get('drafting'):
                         gs_temp['fakeout_active'] = client_state.get('draft_fakeout', False)
                         gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
+                    else:
+                        if client_state.get('casca_auto_fakeout', False) or client_state.get('fakeout_triggered', False):
+                            gs_temp['fakeout_active'] = True
+                        if client_state.get('hidden_triggered', False):
+                            gs_temp['hidden_mode'] = True
                     sel, legs = get_ui_selection(gs_temp, sr, sc, draft_moves=client_state.get('draft_moves', []))
                     if sel is not None:
                         client_state['selected'] = sel
@@ -2826,7 +2838,7 @@ async def game_loop():
                     
                     if new_gs.get('game_over') and not gs.get('game_over'):
                         play_sound('game_over')
-                    elif (gs.get('last_move') != new_gs.get('last_move') and new_gs.get('last_move')) or len(new_gs.get('log', [])) != len(gs.get('log', [])):
+                    elif (gs.get('last_move') != new_gs.get('last_move') and new_gs.get('last_move')) or (len(new_gs.get('log', [])) != len(gs.get('log', [])) and not (gs.get('last_move') is not None and new_gs.get('last_move') is None)):
                         lm = new_gs.get('last_move')
                         fr, fc, tr, tc = lm if lm else (None, None, None, None)
                         
@@ -2893,7 +2905,7 @@ async def game_loop():
                                 if p_anim:
                                     trigger_piece_anim(client_state, p_anim, tr_u, tc_u, fr_u, fc_u, is_shadow=False, is_fakeout=False, is_capture=False)
                         else:
-                            if new_gs.get('last_move'):
+                            if new_gs.get('last_move') and gs.get('last_move') != new_gs.get('last_move'):
                                 fr, fc, tr, tc = new_gs['last_move']
                                 p_anim = new_gs['board'][tr][tc]
                                 if not p_anim:
@@ -3638,6 +3650,11 @@ async def game_loop():
                             if client_state.get('drafting'):
                                 gs_temp['fakeout_active'] = client_state.get('draft_fakeout', False)
                                 gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
+                            else:
+                                if client_state.get('casca_auto_fakeout', False) or client_state.get('fakeout_triggered', False):
+                                    gs_temp['fakeout_active'] = True
+                                if client_state.get('hidden_triggered', False):
+                                    gs_temp['hidden_mode'] = True
                             sel, legs = get_ui_selection(gs_temp, r, c, draft_moves=client_state.get('draft_moves', []))
                             if sel is not None:
                                 client_state['predicting_mode'] = False
@@ -3750,13 +3767,14 @@ async def game_loop():
                                 tb_click = get_true_board(curr_dgs_click, gs['turn'])
                                 p_click = tb_click[sr][sc]
                                 is_casca_drag = p_click is None
-                                is_fakeout_active_now = client_state.get('draft_fakeout', False) if client_state.get('drafting') else gs.get('fakeout_active', False)
+                                is_fakeout_active_now = client_state.get('draft_fakeout', False) if client_state.get('drafting') else (gs.get('fakeout_active', False) or client_state.get('casca_auto_fakeout', False) or client_state.get('fakeout_triggered', False))
                                 
                                 if is_casca_drag and not is_fakeout_active_now:
                                     play_sound('error')
                                     trigger_square_flash(client_state, r, c, (230, 60, 60), 'gesture_invalid')
                                     client_state['selected'] = None
                                     client_state['legal_sq'] = []
+                                    client_state['casca_auto_fakeout'] = False
                                     continue
 
                                 conflict = check_conflict(gs, sr, sc, r, c)
@@ -3837,7 +3855,7 @@ async def game_loop():
                                     if p and pt(p) == "P" and r in (0, 7):
                                         promo = await ask_promo(screen, fonts, active_color, websocket, client_state)
 
-                                    is_auto_draft = not client_state.get('drafting') and gs.get('hidden_count', 0) > 0 and not (gs.get('fakeout_active', False) or client_state.get('fakeout_triggered', False))
+                                    is_auto_draft = not client_state.get('drafting') and gs.get('hidden_count', 0) > 0 and not (gs.get('fakeout_active', False) or client_state.get('fakeout_triggered', False) or client_state.get('casca_auto_fakeout', False))
                                     if client_state.get('drafting') or is_auto_draft:
                                         if is_auto_draft:
                                             client_state['drafting'] = True
@@ -3967,6 +3985,7 @@ async def game_loop():
                                             client_state['selected'] = None
                                             client_state['legal_sq'] = []
                                             gs['hidden_mode'] = False
+                                            client_state['casca_auto_fakeout'] = False
                                         else:
                                             move_cmd = {
                                                 "type": "action", "action": "move",
@@ -3975,12 +3994,20 @@ async def game_loop():
                                             await websocket.send(json.dumps(move_cmd))
                                             client_state['selected'] = None
                                             client_state['legal_sq'] = []
+                                            gs['hidden_mode'] = False
+                                            gs['fakeout_active'] = False
+                                            client_state['casca_auto_fakeout'] = False
                             else:
                                 gs_temp = copy.copy(gs)
                                 gs_temp['drafting_active'] = client_state.get('drafting', False)
                                 if client_state.get('drafting'):
                                     gs_temp['fakeout_active'] = client_state.get('draft_fakeout', False)
                                     gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
+                                else:
+                                    if client_state.get('casca_auto_fakeout', False) or client_state.get('fakeout_triggered', False):
+                                        gs_temp['fakeout_active'] = True
+                                    if client_state.get('hidden_triggered', False):
+                                        gs_temp['hidden_mode'] = True
                                 sel, legs = get_ui_selection(gs_temp, r, c, draft_moves=client_state.get('draft_moves', []))
                                 if sel is not None:
                                     client_state['selected'] = sel
@@ -3999,6 +4026,11 @@ async def game_loop():
                             if client_state.get('drafting'):
                                 gs_temp['fakeout_active'] = client_state.get('draft_fakeout', False)
                                 gs_temp['hidden_mode'] = client_state.get('draft_hidden', False)
+                            else:
+                                if client_state.get('casca_auto_fakeout', False) or client_state.get('fakeout_triggered', False):
+                                    gs_temp['fakeout_active'] = True
+                                if client_state.get('hidden_triggered', False):
+                                    gs_temp['hidden_mode'] = True
                             sel, legs = get_ui_selection(gs_temp, r, c, draft_moves=client_state.get('draft_moves', []))
                             if sel is not None:
                                 client_state['selected'] = sel
