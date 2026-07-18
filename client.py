@@ -4016,8 +4016,8 @@ async def game_loop():
             if 'intro_start' not in client_state:
                 client_state['intro_start'] = pygame.time.get_ticks()
             elapsed = pygame.time.get_ticks() - client_state['intro_start']
-            if elapsed >= 6300:
-                t_ms = elapsed - 6300
+            if elapsed >= 5500:
+                t_ms = elapsed - 5500
                 cx, cy = WIN_W // 2, WIN_H // 2
                 
                 p_str = 'wP'
