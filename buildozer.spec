@@ -1,6 +1,6 @@
 [app]
 icon.filename = %(source.dir)s/icon.png
-presplash.filename = %(source.dir)s/empty_presplash.png
+android.presplash_lottie = assets/lottie/hidden_chess_presplash_7s_lottie.json
 android.presplash_color = #000000
 
 # (str) Title of your application
@@ -17,7 +17,7 @@ source.dir = .
 
 # (list) Source files to include (let empty to include all the files)
 source.include_exts = py,png,jpg,kv,atlas,ttf,json,wav,ogg
-source.include_patterns = assets/themes/**,assets/sounds/**,assets/*.ttf,assets/*.png,assets/*.json
+source.include_patterns = assets/themes/**,assets/sounds/**,assets/*.ttf,assets/*.png,assets/*.json,assets/lottie/*.json
 
 # (str) Application versioning
 version = 1.5.4
@@ -42,12 +42,6 @@ android.archs = arm64-v8a, armeabi-v7a
 
 # (str) python-for-android branch to use
 p4a.branch = develop
-
-# (int) Target Android API, should be as high as possible.
-android.api = 34
-
-# (int) Minimum API your APK / AAB will support.
-android.minapi = 24
 
 [buildozer]
 
