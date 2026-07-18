@@ -1,6 +1,6 @@
 {
   "name": "shadow-chess",
-  "version": "1.5.4",
+  "version": "1.5.401",
   "description": "Hidden Chess WebSocket server",
   "main": "server.py",
   "scripts": {

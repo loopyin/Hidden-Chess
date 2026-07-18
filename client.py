@@ -2499,7 +2499,7 @@ async def game_loop():
     error_msg = ""
     running = True
 
-    app_state = "SPLASH_LOGO"
+    app_state = "INTRO_ANIM"
     gs = make_state()
     client_state = {
         'my_color': None,
@@ -4011,108 +4011,72 @@ async def game_loop():
 
         screen.fill(BG)
 
-        if app_state == "SPLASH_LOGO":
-            screen.fill((0, 0, 0))
-            if 'splash_start' not in client_state:
-                client_state['splash_start'] = pygame.time.get_ticks()
-                try:
-                    loaded_img = pygame.image.load("logo.png").convert_alpha()
-                    lw, lh = loaded_img.get_size()
-                    max_w = WIN_W * 0.8
-                    max_h = WIN_H * 0.8
-                    if lw > max_w or lh > max_h:
-                        scale = min(max_w / lw, max_h / lh)
-                        loaded_img = pygame.transform.smoothscale(loaded_img, (int(lw * scale), int(lh * scale)))
-                    client_state['logo_img'] = loaded_img
-                except Exception as e:
-                    client_state['logo_img'] = pygame.Surface((200, 200), pygame.SRCALPHA)
-            
-            t_ms = pygame.time.get_ticks() - client_state['splash_start']
-            cx, cy = WIN_W // 2, WIN_H // 2
-
-            if t_ms < 7000:
-                logo = client_state['logo_img']
-                alpha = 255
-                if t_ms >= 6000:
-                    alpha = int(255 * (1.0 - (t_ms - 6000) / 1000.0))
-                    alpha = max(0, min(255, alpha))
-                
-                if alpha > 0:
-                    logo_rect = logo.get_rect(center=(cx, cy))
-                    if alpha < 255:
-                        s_img = logo.copy()
-                        s_img.fill((255, 255, 255, alpha), special_flags=pygame.BLEND_RGBA_MULT)
-                        screen.blit(s_img, logo_rect)
-                    else:
-                        screen.blit(logo, logo_rect)
-            else:
-                app_state = "INTRO_ANIM"
-
         if app_state == "INTRO_ANIM":
             screen.fill((0, 0, 0))
             if 'intro_start' not in client_state:
                 client_state['intro_start'] = pygame.time.get_ticks()
-            t_ms = pygame.time.get_ticks() - client_state['intro_start']
-            cx, cy = WIN_W // 2, WIN_H // 2
-            
-            p_str = 'wP'
-            img = IMAGES.get(p_str)
-            if img:
-                base_img = pygame.transform.smoothscale(img, (SQ, SQ))
-            else:
-                base_img = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
-                t_surf = fonts['piece'].render(GLYPHS[p_str], True, (255, 255, 255))
-                base_img.blit(t_surf, t_surf.get_rect(center=(SQ//2, SQ//2)))
-
-            current_cy = cy
-            if t_ms >= 5500 and t_ms < 7500:
-                p_up = min(1.0, (t_ms - 5500) / 500.0)
-                current_cy = cy - (p_up * p_up * 150)
+            elapsed = pygame.time.get_ticks() - client_state['intro_start']
+            if elapsed >= 6300:
+                t_ms = elapsed - 6300
+                cx, cy = WIN_W // 2, WIN_H // 2
                 
-            if t_ms < 7500:
-                if 'intro_flame_particles' not in client_state:
-                    client_state['intro_flame_particles'] = []
-                if t_ms < 5500 or (t_ms >= 5500 and t_ms < 6000):
-                    for _ in range(2):
-                        px = cx + random.randint(-SQ//3, SQ//3)
-                        py = int(current_cy) + random.randint(0, int(SQ*0.5))
-                        client_state['intro_flame_particles'].append(FlameParticle(px, py, r=random.randint(4, 7), vx=0, vy=0, color_type='blue'))
-
-            if client_state.get('intro_flame_particles'):
-                for p in client_state['intro_flame_particles']:
-                    p.update()
-                    p.draw(screen)
-                client_state['intro_flame_particles'] = [p for p in client_state['intro_flame_particles'] if p.r > 1]
-
-            if t_ms < 1500:
-                p = t_ms / 1500.0
-                alpha = int(255 * p)
-                scale = 1.3 - 0.3 * p
-                size = int(SQ * scale)
-                s_img = pygame.transform.smoothscale(base_img, (size, size))
-                s_img.set_alpha(alpha)
-                screen.blit(s_img, s_img.get_rect(center=(cx, int(current_cy))))
-            elif t_ms < 5500:
-                s_img = pygame.transform.smoothscale(base_img, (SQ, SQ))
-                screen.blit(s_img, s_img.get_rect(center=(cx, int(current_cy))))
-                
-                bar_w = 80
-                bar_h = 2
-                bx = cx - bar_w // 2
-                by = int(current_cy) + SQ // 2 + 10
-                p_bar = (t_ms - 1500) / 4000.0
-                draw_rect_aa(screen, (30, 30, 35), pygame.Rect(bx, by, bar_w, bar_h))
-                draw_rect_aa(screen, (240, 240, 245), pygame.Rect(bx, by, int(bar_w * p_bar), bar_h))
-            elif t_ms < 7500:
-                p_up = min(1.0, (t_ms - 5500) / 500.0)
-                alpha = int(255 * (1.0 - p_up))
-                if alpha > 0:
-                    s_img = pygame.transform.smoothscale(base_img, (SQ, SQ))
+                p_str = 'wP'
+                img = IMAGES.get(p_str)
+                if img:
+                    base_img = pygame.transform.smoothscale(img, (SQ, SQ))
+                else:
+                    base_img = pygame.Surface((SQ, SQ), pygame.SRCALPHA)
+                    t_surf = fonts['piece'].render(GLYPHS[p_str], True, (255, 255, 255))
+                    base_img.blit(t_surf, t_surf.get_rect(center=(SQ//2, SQ//2)))
+                    
+                current_cy = cy
+                if t_ms >= 5500 and t_ms < 7500:
+                    p_up = min(1.0, (t_ms - 5500) / 500.0)
+                    current_cy = cy - (p_up * p_up * 150)
+                    
+                if t_ms < 7500:
+                    if 'intro_flame_particles' not in client_state:
+                        client_state['intro_flame_particles'] = []
+                    if t_ms < 5500 or (t_ms >= 5500 and t_ms < 6000):
+                        for _ in range(2):
+                            px = cx + random.randint(-SQ//3, SQ//3)
+                            py = int(current_cy) + random.randint(0, int(SQ*0.5))
+                            client_state['intro_flame_particles'].append(FlameParticle(px, py, r=random.randint(4, 7), vx=0, vy=0, color_type='blue'))
+                            
+                if client_state.get('intro_flame_particles'):
+                    for p in client_state['intro_flame_particles']:
+                        p.update()
+                        p.draw(screen)
+                    client_state['intro_flame_particles'] = [p for p in client_state['intro_flame_particles'] if p.r > 1]
+                    
+                if t_ms < 1500:
+                    p = t_ms / 1500.0
+                    alpha = int(255 * p)
+                    scale = 1.3 - 0.3 * p
+                    size = int(SQ * scale)
+                    s_img = pygame.transform.smoothscale(base_img, (size, size))
                     s_img.set_alpha(alpha)
                     screen.blit(s_img, s_img.get_rect(center=(cx, int(current_cy))))
-            if t_ms >= 7500:
-                app_state = "MENU"
-
+                elif t_ms < 5500:
+                    s_img = pygame.transform.smoothscale(base_img, (SQ, SQ))
+                    screen.blit(s_img, s_img.get_rect(center=(cx, int(current_cy))))
+                    bar_w = 80
+                    bar_h = 2
+                    bx = cx - bar_w // 2
+                    by = int(current_cy) + SQ // 2 + 10
+                    p_bar = (t_ms - 1500) / 4000.0
+                    draw_rect_aa(screen, (30, 30, 35), pygame.Rect(bx, by, bar_w, bar_h))
+                    draw_rect_aa(screen, (240, 240, 245), pygame.Rect(bx, by, int(bar_w * p_bar), bar_h))
+                elif t_ms < 7500:
+                    p_up = min(1.0, (t_ms - 5500) / 500.0)
+                    alpha = int(255 * (1.0 - p_up))
+                    if alpha > 0:
+                        s_img = pygame.transform.smoothscale(base_img, (SQ, SQ))
+                        s_img.set_alpha(alpha)
+                        screen.blit(s_img, s_img.get_rect(center=(cx, int(current_cy))))
+                        
+                if t_ms >= 7500:
+                    app_state = "MENU"
         if app_state == "MENU":
             if 'menu_anim_t' not in client_state or client_state.get('menu_anim_state') != app_state:
                 client_state['menu_anim_t'] = pygame.time.get_ticks()
@@ -4182,7 +4146,7 @@ async def game_loop():
                     screen.blit(psurf, (int(p['x'] - size), int(p['y'] - size)))
 
             draw_text_center(screen, "Hidden Chess", title_font, T_MAIN, menu_y_start - 80)
-            draw_text_center(screen, "v1.5.4", fonts['small'], T_DIM, menu_y_start - 40)
+            draw_text_center(screen, "v1.5.401", fonts['small'], T_DIM, menu_y_start - 40)
             
             draw_fancy_btn(screen, "Criar Jogo", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_create, is_hover=btn_create.collidepoint(mouse))
             draw_fancy_btn(screen, "Entrar no Jogo", fonts['big'], BTN_N, BTN_H, BTN_TXT, btn_join, is_hover=btn_join.collidepoint(mouse))
